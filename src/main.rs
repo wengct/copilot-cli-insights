@@ -9,14 +9,30 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader},
     path::PathBuf,
 };
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use rusqlite::params;
+mod db;
+
 #[tokio::main]
 async fn main() {
+    // 初始化 SQLite 資料庫並進行第一次增量同步
+    if let Ok(conn) = db::get_db_conn() {
+        if let Err(e) = db::init_db(&conn) {
+            eprintln!("❌ 初始化 SQLite 資料庫失敗: {}", e);
+        } else if let Err(e) = db::sync_usage_logs(&conn) {
+            eprintln!("❌ 初次同步日誌檔到 SQLite 失敗: {}", e);
+        } else {
+            println!("✅ SQLite 資料庫已成功載入並完成增量同步！");
+        }
+    } else {
+        eprintln!("❌ 無法連結到 SQLite 資料庫，請檢查 ~/.copilot 是否存在或設定 COPILOT_DIR");
+    }
+
     // 建立 Axum 路由
     let app = Router::new()
         // API 路由
@@ -170,38 +186,34 @@ struct DateListResponse {
 }
 
 async fn get_available_dates() -> impl IntoResponse {
-    let copilot_dir = match get_copilot_dir() {
-        Ok(dir) => dir,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
-    };
+    // 在讀取前做一次增量同步以確保資料最新
+    let _ = tokio::task::spawn_blocking(|| {
+        if let Ok(conn) = db::get_db_conn() {
+            let _ = db::sync_usage_logs(&conn);
+        }
+    }).await;
 
-    let usage_dir = copilot_dir.join("usage");
-    if !usage_dir.exists() {
-        return Json(DateListResponse { dates: vec![] }).into_response();
-    }
-
-    let mut dates = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(usage_dir) {
-        for entry in entries.flatten() {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_file() {
-                    let filename = entry.file_name().to_string_lossy().into_owned();
-                    // 檔名格式符合 usage-YYYY-MM-DD.jsonl
-                    if filename.starts_with("usage-") && filename.ends_with(".jsonl") {
-                        let date_str = filename
-                            .trim_start_matches("usage-")
-                            .trim_end_matches(".jsonl");
-                        dates.push(date_str.to_string());
-                    }
-                }
+    let res: Result<Vec<String>, String> = tokio::task::spawn_blocking(|| {
+        let conn = db::get_db_conn()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT date FROM usage_entries ORDER BY date DESC")
+            .map_err(|e| e.to_string())?;
+        
+        let dates_iter = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        
+        let mut dates = Vec::new();
+        for d in dates_iter {
+            if let Ok(date) = d {
+                dates.push(date);
             }
         }
+        Ok(dates)
+    }).await.unwrap_or_else(|_| Err("執行緒執行失敗".to_string()));
+
+    match res {
+        Ok(dates) => Json(DateListResponse { dates }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
     }
-
-    // 由新到舊排序
-    dates.sort_by(|a, b| b.cmp(a));
-
-    Json(DateListResponse { dates }).into_response()
 }
 
 // =========================================================================
@@ -286,27 +298,111 @@ struct SessionSummary {
 }
 
 async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
-    let copilot_dir = match get_copilot_dir() {
-        Ok(dir) => dir,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    // 確保資料最新
+    let _ = tokio::task::spawn_blocking(|| {
+        if let Ok(conn) = db::get_db_conn() {
+            let _ = db::sync_usage_logs(&conn);
+        }
+    }).await;
+
+    let date_clone = date.clone();
+    let entries_res: Result<Vec<UsageEntry>, String> = tokio::task::spawn_blocking(move || {
+        let conn = db::get_db_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT 
+                timestamp, session_id, session_name, transcript_path, cwd, version, turn_no, model, model_id,
+                tokens_input, tokens_output, tokens_cache_read, tokens_reasoning, tokens_total,
+                delta_input, delta_output, delta_cache_read, delta_reasoning, delta_total,
+                duration_ms, premium_requests
+             FROM usage_entries WHERE date = ? ORDER BY timestamp ASC"
+        ).map_err(|e| e.to_string())?;
+
+        let entries_iter = stmt.query_map(params![date_clone], |row| {
+            let tokens_input: Option<u64> = row.get::<_, Option<i64>>(9)?.map(|v| v as u64);
+            let tokens_output: Option<u64> = row.get::<_, Option<i64>>(10)?.map(|v| v as u64);
+            let tokens_cache_read: Option<u64> = row.get::<_, Option<i64>>(11)?.map(|v| v as u64);
+            let tokens_reasoning: Option<u64> = row.get::<_, Option<i64>>(12)?.map(|v| v as u64);
+            let tokens_total: Option<u64> = row.get::<_, Option<i64>>(13)?.map(|v| v as u64);
+
+            let tokens = if let (Some(input), Some(output), Some(total)) = (tokens_input, tokens_output, tokens_total) {
+                Some(TokenStats {
+                    input,
+                    output,
+                    cache_read: tokens_cache_read,
+                    cache_write: None,
+                    reasoning: tokens_reasoning,
+                    total,
+                })
+            } else {
+                None
+            };
+
+            let delta_input: Option<u64> = row.get::<_, Option<i64>>(14)?.map(|v| v as u64);
+            let delta_output: Option<u64> = row.get::<_, Option<i64>>(15)?.map(|v| v as u64);
+            let delta_cache_read: Option<u64> = row.get::<_, Option<i64>>(16)?.map(|v| v as u64);
+            let delta_reasoning: Option<u64> = row.get::<_, Option<i64>>(17)?.map(|v| v as u64);
+            let delta_total: Option<u64> = row.get::<_, Option<i64>>(18)?.map(|v| v as u64);
+
+            let delta_tokens = if let (Some(input), Some(output), Some(total)) = (delta_input, delta_output, delta_total) {
+                Some(TokenStats {
+                    input,
+                    output,
+                    cache_read: delta_cache_read,
+                    cache_write: None,
+                    reasoning: delta_reasoning,
+                    total,
+                })
+            } else {
+                None
+            };
+
+            let duration_ms: Option<f64> = row.get::<_, Option<i64>>(19)?.map(|v| v as f64);
+            let premium_requests: Option<f64> = row.get::<_, Option<i64>>(20)?.map(|v| v as f64);
+
+            let cost = if duration_ms.is_some() || premium_requests.is_some() {
+                Some(CostStats {
+                    total_api_duration_ms: duration_ms,
+                    total_duration_ms: None,
+                    total_premium_requests: premium_requests,
+                })
+            } else {
+                None
+            };
+
+            Ok(UsageEntry {
+                timestamp: row.get(0)?,
+                session_id: row.get(1)?,
+                session_name: row.get(2).ok(),
+                transcript_path: row.get(3).ok(),
+                cwd: row.get(4).ok(),
+                version: row.get(5).ok(),
+                turn_no: row.get::<_, i64>(6)? as u32,
+                model: row.get(7).ok(),
+                model_id: row.get(8).ok(),
+                tokens,
+                delta_tokens,
+                context: None,
+                cost,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        let mut entries = Vec::new();
+        for entry in entries_iter {
+            if let Ok(e) = entry {
+                entries.push(e);
+            }
+        }
+        Ok(entries)
+    }).await.unwrap_or_else(|_| Err("執行緒執行失敗".to_string()));
+
+    let entries = match entries_res {
+        Ok(e) => e,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err }))).into_response(),
     };
 
-    let filepath = copilot_dir.join("usage").join(format!("usage-{}.jsonl", date));
-    if !filepath.exists() {
+    if entries.is_empty() {
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "找不到指定日期的使用日誌。" }))).into_response();
     }
-
-    let mut file = match File::open(&filepath) {
-        Ok(f) => f,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("開啟檔案失敗: {}", e) }))).into_response(),
-    };
-
-    let mut content = String::new();
-    if let Err(e) = file.read_to_string(&mut content) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("讀取檔案失敗: {}", e) }))).into_response();
-    }
-
-    let entries = parse_usage_entries(&content);
 
     // 整理當日摘要指標
     let mut summary = DaySummary::default();
@@ -320,7 +416,6 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
             summary.total_reasoning_tokens += tokens.reasoning.unwrap_or(0);
             summary.total_cache_read_tokens += tokens.cache_read.unwrap_or(0);
         } else if let Some(ref tokens) = entry.tokens {
-            // 備用 fallback：如果 delta_tokens 不存在，且是第一個 turn，則使用 tokens 的值
             if entry.turn_no == 1 {
                 summary.total_tokens += tokens.total;
                 summary.total_input_tokens += tokens.input;
@@ -344,14 +439,12 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
     // 整理每個 Session 的統計
     let mut sessions_summary = Vec::new();
     for (session_id, s_entries) in sessions_map {
-        // 以該 Session 的最大 turn_no 或最後一個 entry 作為代表
         let last_entry = s_entries
             .iter()
             .max_by_key(|e| e.turn_no)
             .cloned()
             .unwrap_or_else(|| s_entries[0].clone());
 
-        // 計算該 Session 的累積 Token 與 Cache Token
         let session_tokens = s_entries
             .iter()
             .map(|e| e.delta_tokens.as_ref().map(|t| t.total).unwrap_or(0))
@@ -410,7 +503,6 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
         });
     }
 
-    // 按時間排序 Session
     sessions_summary.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     Json(UsageDetailsResponse {
@@ -693,39 +785,34 @@ struct MonthListResponse {
 }
 
 async fn get_available_months() -> impl IntoResponse {
-    let copilot_dir = match get_copilot_dir() {
-        Ok(dir) => dir,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
-    };
+    // 確保資料最新
+    let _ = tokio::task::spawn_blocking(|| {
+        if let Ok(conn) = db::get_db_conn() {
+            let _ = db::sync_usage_logs(&conn);
+        }
+    }).await;
 
-    let usage_dir = copilot_dir.join("usage");
-    if !usage_dir.exists() {
-        return Json(MonthListResponse { months: vec![] }).into_response();
-    }
-
-    let mut months = std::collections::HashSet::new();
-    if let Ok(entries) = std::fs::read_dir(usage_dir) {
-        for entry in entries.flatten() {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_file() {
-                    let filename = entry.file_name().to_string_lossy().into_owned();
-                    if filename.starts_with("usage-") && filename.ends_with(".jsonl") {
-                        let date_str = filename
-                            .trim_start_matches("usage-")
-                            .trim_end_matches(".jsonl");
-                        if date_str.len() >= 7 {
-                            months.insert(date_str[0..7].to_string());
-                        }
-                    }
-                }
+    let res: Result<Vec<String>, String> = tokio::task::spawn_blocking(|| {
+        let conn = db::get_db_conn()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT substr(date, 1, 7) AS month FROM usage_entries ORDER BY month DESC")
+            .map_err(|e| e.to_string())?;
+        
+        let months_iter = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        
+        let mut months = Vec::new();
+        for m in months_iter {
+            if let Ok(month) = m {
+                months.push(month);
             }
         }
+        Ok(months)
+    }).await.unwrap_or_else(|_| Err("執行緒執行失敗".to_string()));
+
+    match res {
+        Ok(month_list) => Json(MonthListResponse { months: month_list }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
     }
-
-    let mut month_list: Vec<String> = months.into_iter().collect();
-    month_list.sort_by(|a, b| b.cmp(a));
-
-    Json(MonthListResponse { months: month_list }).into_response()
 }
 
 // =========================================================================
@@ -770,14 +857,118 @@ struct ProjectUsageSummary {
 }
 
 async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoResponse {
-    let copilot_dir = match get_copilot_dir() {
-        Ok(dir) => dir,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    // 確保資料最新
+    let _ = tokio::task::spawn_blocking(|| {
+        if let Ok(conn) = db::get_db_conn() {
+            let _ = db::sync_usage_logs(&conn);
+        }
+    }).await;
+
+    let query_month = format!("{}-%", year_month);
+    let entries_res: Result<Vec<UsageEntry>, String> = tokio::task::spawn_blocking(move || {
+        let conn = db::get_db_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT 
+                timestamp, session_id, session_name, transcript_path, cwd, version, turn_no, model, model_id,
+                tokens_input, tokens_output, tokens_cache_read, tokens_reasoning, tokens_total,
+                delta_input, delta_output, delta_cache_read, delta_reasoning, delta_total,
+                duration_ms, premium_requests
+             FROM usage_entries WHERE date LIKE ? ORDER BY timestamp ASC"
+        ).map_err(|e| e.to_string())?;
+
+        let entries_iter = stmt.query_map(params![query_month], |row| {
+            let tokens_input: Option<u64> = row.get::<_, Option<i64>>(9)?.map(|v| v as u64);
+            let tokens_output: Option<u64> = row.get::<_, Option<i64>>(10)?.map(|v| v as u64);
+            let tokens_cache_read: Option<u64> = row.get::<_, Option<i64>>(11)?.map(|v| v as u64);
+            let tokens_reasoning: Option<u64> = row.get::<_, Option<i64>>(12)?.map(|v| v as u64);
+            let tokens_total: Option<u64> = row.get::<_, Option<i64>>(13)?.map(|v| v as u64);
+
+            let tokens = if let (Some(input), Some(output), Some(total)) = (tokens_input, tokens_output, tokens_total) {
+                Some(TokenStats {
+                    input,
+                    output,
+                    cache_read: tokens_cache_read,
+                    cache_write: None,
+                    reasoning: tokens_reasoning,
+                    total,
+                })
+            } else {
+                None
+            };
+
+            let delta_input: Option<u64> = row.get::<_, Option<i64>>(14)?.map(|v| v as u64);
+            let delta_output: Option<u64> = row.get::<_, Option<i64>>(15)?.map(|v| v as u64);
+            let delta_cache_read: Option<u64> = row.get::<_, Option<i64>>(16)?.map(|v| v as u64);
+            let delta_reasoning: Option<u64> = row.get::<_, Option<i64>>(17)?.map(|v| v as u64);
+            let delta_total: Option<u64> = row.get::<_, Option<i64>>(18)?.map(|v| v as u64);
+
+            let delta_tokens = if let (Some(input), Some(output), Some(total)) = (delta_input, delta_output, delta_total) {
+                Some(TokenStats {
+                    input,
+                    output,
+                    cache_read: delta_cache_read,
+                    cache_write: None,
+                    reasoning: delta_reasoning,
+                    total,
+                })
+            } else {
+                None
+            };
+
+            let duration_ms: Option<f64> = row.get::<_, Option<i64>>(19)?.map(|v| v as f64);
+            let premium_requests: Option<f64> = row.get::<_, Option<i64>>(20)?.map(|v| v as f64);
+
+            let cost = if duration_ms.is_some() || premium_requests.is_some() {
+                Some(CostStats {
+                    total_api_duration_ms: duration_ms,
+                    total_duration_ms: None,
+                    total_premium_requests: premium_requests,
+                })
+            } else {
+                None
+            };
+
+            Ok(UsageEntry {
+                timestamp: row.get(0)?,
+                session_id: row.get(1)?,
+                session_name: row.get(2).ok(),
+                transcript_path: row.get(3).ok(),
+                cwd: row.get(4).ok(),
+                version: row.get(5).ok(),
+                turn_no: row.get::<_, i64>(6)? as u32,
+                model: row.get(7).ok(),
+                model_id: row.get(8).ok(),
+                tokens,
+                delta_tokens,
+                context: None,
+                cost,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        let mut entries = Vec::new();
+        for entry in entries_iter {
+            if let Ok(e) = entry {
+                entries.push(e);
+            }
+        }
+        Ok(entries)
+    }).await.unwrap_or_else(|_| Err("執行緒執行失敗".to_string()));
+
+    let entries = match entries_res {
+        Ok(e) => e,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err }))).into_response(),
     };
 
-    let usage_dir = copilot_dir.join("usage");
-    if !usage_dir.exists() {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "找不到使用量資料夾。" }))).into_response();
+    if entries.is_empty() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "找不到該月份的使用量資料。" }))).into_response();
+    }
+
+    let mut daily_map: HashMap<String, Vec<UsageEntry>> = HashMap::new();
+    for e in &entries {
+        if e.timestamp.len() >= 10 {
+            let d = e.timestamp[0..10].to_string();
+            daily_map.entry(d).or_default().push(e.clone());
+        }
     }
 
     let mut daily_breakdown = Vec::new();
@@ -791,111 +982,89 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
     let mut project_tokens: HashMap<String, u64> = HashMap::new();
     let mut project_cache_tokens: HashMap<String, u64> = HashMap::new();
 
-    let prefix = format!("usage-{}-", year_month);
-    
-    if let Ok(entries) = std::fs::read_dir(usage_dir) {
-        for entry in entries.flatten() {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_file() {
-                    let filename = entry.file_name().to_string_lossy().into_owned();
-                    if filename.starts_with(&prefix) && filename.ends_with(".jsonl") {
-                        let date_str = filename
-                            .trim_start_matches("usage-")
-                            .trim_end_matches(".jsonl")
-                            .to_string();
-                        
-                        let filepath = entry.path();
-                        if let Ok(mut file) = File::open(&filepath) {
-                            let mut content = String::new();
-                            if file.read_to_string(&mut content).is_ok() {
-                                let entries_list = parse_usage_entries(&content);
+    // 依日期小到大排序
+    let mut sorted_dates: Vec<String> = daily_map.keys().cloned().collect();
+    sorted_dates.sort();
 
-                                if !entries_list.is_empty() {
-                                    let mut day_tokens = 0;
-                                    let mut day_input = 0;
-                                    let mut day_output = 0;
-                                    let mut day_reasoning = 0;
-                                    let mut day_cache_read = 0;
-                                    let mut day_duration = 0;
-                                    let mut day_requests = 0;
-                                    let mut day_sessions = std::collections::HashSet::new();
+    for date_str in sorted_dates {
+        let entries_list = daily_map.get(&date_str).unwrap();
 
-                                    for e in &entries_list {
-                                        let sid = e.session_id.clone();
-                                        day_sessions.insert(sid.clone());
+        let mut day_tokens = 0;
+        let mut day_input = 0;
+        let mut day_output = 0;
+        let mut day_reasoning = 0;
+        let mut day_cache_read = 0;
+        let mut day_duration = 0;
+        let mut day_requests = 0;
+        let mut day_sessions = std::collections::HashSet::new();
 
-                                        let mut entry_tokens = 0;
-                                        if let Some(ref tokens) = e.delta_tokens {
-                                            entry_tokens = tokens.total;
-                                            day_tokens += tokens.total;
-                                            day_input += tokens.input;
-                                            day_output += tokens.output;
-                                            day_reasoning += tokens.reasoning.unwrap_or(0);
-                                            day_cache_read += tokens.cache_read.unwrap_or(0);
-                                        } else if let Some(ref tokens) = e.tokens {
-                                            if e.turn_no == 1 {
-                                                entry_tokens = tokens.total;
-                                                day_tokens += tokens.total;
-                                                day_input += tokens.input;
-                                                day_output += tokens.output;
-                                                day_reasoning += tokens.reasoning.unwrap_or(0);
-                                                day_cache_read += tokens.cache_read.unwrap_or(0);
-                                            }
-                                        }
+        for e in entries_list {
+            let sid = e.session_id.clone();
+            day_sessions.insert(sid.clone());
 
-                                        if let Some(ref cost) = e.cost {
-                                            day_duration += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
-                                            day_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
-                                        }
-
-                                        let mut entry_cache = 0;
-                                        if let Some(ref tokens) = e.delta_tokens {
-                                            entry_cache = tokens.cache_read.unwrap_or(0);
-                                        } else if let Some(ref tokens) = e.tokens {
-                                            if e.turn_no == 1 {
-                                                entry_cache = tokens.cache_read.unwrap_or(0);
-                                            }
-                                        }
-
-                                        let model = e.model.clone().unwrap_or_else(|| "Unknown Model".to_string());
-                                        model_sessions.entry(model.clone()).or_default().insert(sid.clone());
-                                        *model_tokens.entry(model.clone()).or_default() += entry_tokens;
-                                        *model_cache_tokens.entry(model).or_default() += entry_cache;
-
-                                        let cwd = e.cwd.clone().unwrap_or_else(|| "Unknown Path".to_string());
-                                        project_sessions.entry(cwd.clone()).or_default().insert(sid.clone());
-                                        *project_tokens.entry(cwd.clone()).or_default() += entry_tokens;
-                                        *project_cache_tokens.entry(cwd).or_default() += entry_cache;
-                                    }
-
-                                    monthly_summary.total_tokens += day_tokens;
-                                    monthly_summary.total_input_tokens += day_input;
-                                    monthly_summary.total_output_tokens += day_output;
-                                    monthly_summary.total_reasoning_tokens += day_reasoning;
-                                    monthly_summary.total_cache_read_tokens += day_cache_read;
-                                    monthly_summary.total_duration_ms += day_duration;
-                                    monthly_summary.total_requests += day_requests;
-
-                                    daily_breakdown.push(DailyBreakdownEntry {
-                                        date: date_str,
-                                        total_sessions: day_sessions.len(),
-                                        total_tokens: day_tokens,
-                                        total_input_tokens: day_input,
-                                        total_output_tokens: day_output,
-                                        total_cache_read_tokens: day_cache_read,
-                                        total_duration_ms: day_duration,
-                                        total_requests: day_requests,
-                                    });
-                                }
-                            }
-                        }
-                    }
+            let mut entry_tokens = 0;
+            if let Some(ref tokens) = e.delta_tokens {
+                entry_tokens = tokens.total;
+                day_tokens += tokens.total;
+                day_input += tokens.input;
+                day_output += tokens.output;
+                day_reasoning += tokens.reasoning.unwrap_or(0);
+                day_cache_read += tokens.cache_read.unwrap_or(0);
+            } else if let Some(ref tokens) = e.tokens {
+                if e.turn_no == 1 {
+                    entry_tokens = tokens.total;
+                    day_tokens += tokens.total;
+                    day_input += tokens.input;
+                    day_output += tokens.output;
+                    day_reasoning += tokens.reasoning.unwrap_or(0);
+                    day_cache_read += tokens.cache_read.unwrap_or(0);
                 }
             }
-        }
-    }
 
-    daily_breakdown.sort_by(|a, b| a.date.cmp(&b.date));
+            if let Some(ref cost) = e.cost {
+                day_duration += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
+                day_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
+            }
+
+            let mut entry_cache = 0;
+            if let Some(ref tokens) = e.delta_tokens {
+                entry_cache = tokens.cache_read.unwrap_or(0);
+            } else if let Some(ref tokens) = e.tokens {
+                if e.turn_no == 1 {
+                    entry_cache = tokens.cache_read.unwrap_or(0);
+                }
+            }
+
+            let model = e.model.clone().unwrap_or_else(|| "Unknown Model".to_string());
+            model_sessions.entry(model.clone()).or_default().insert(sid.clone());
+            *model_tokens.entry(model.clone()).or_default() += entry_tokens;
+            *model_cache_tokens.entry(model).or_default() += entry_cache;
+
+            let cwd = e.cwd.clone().unwrap_or_else(|| "Unknown Path".to_string());
+            project_sessions.entry(cwd.clone()).or_default().insert(sid.clone());
+            *project_tokens.entry(cwd.clone()).or_default() += entry_tokens;
+            *project_cache_tokens.entry(cwd).or_default() += entry_cache;
+        }
+
+        monthly_summary.total_tokens += day_tokens;
+        monthly_summary.total_input_tokens += day_input;
+        monthly_summary.total_output_tokens += day_output;
+        monthly_summary.total_reasoning_tokens += day_reasoning;
+        monthly_summary.total_cache_read_tokens += day_cache_read;
+        monthly_summary.total_duration_ms += day_duration;
+        monthly_summary.total_requests += day_requests;
+
+        daily_breakdown.push(DailyBreakdownEntry {
+            date: date_str,
+            total_sessions: day_sessions.len(),
+            total_tokens: day_tokens,
+            total_input_tokens: day_input,
+            total_output_tokens: day_output,
+            total_cache_read_tokens: day_cache_read,
+            total_duration_ms: day_duration,
+            total_requests: day_requests,
+        });
+    }
 
     let mut all_month_sessions = std::collections::HashSet::new();
     for (_, sids) in &model_sessions {

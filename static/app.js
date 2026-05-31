@@ -175,8 +175,8 @@ const i18n = {
     sync_db: '同步資料',
     sync_db_title: '立即同步日誌檔到 SQLite 資料庫',
     sync_db_loading: '正在同步日誌檔到資料庫...',
-    sync_db_success: '✅ 資料庫同步成功！',
-    sync_db_failed: '❌ 同步失敗: ',
+    sync_db_success: '資料庫同步成功！',
+    sync_db_failed: '同步失敗: ',
   },
   'en': {
     title: 'GitHub Copilot CLI Token Insights Dashboard',
@@ -316,8 +316,8 @@ const i18n = {
     sync_db: 'Sync Data',
     sync_db_title: 'Sync local logs to SQLite database now',
     sync_db_loading: 'Syncing log files to database...',
-    sync_db_success: '✅ Database synced successfully!',
-    sync_db_failed: '❌ Sync failed: ',
+    sync_db_success: 'Database synced successfully!',
+    sync_db_failed: 'Sync failed: ',
   }
 };
 
@@ -504,7 +504,12 @@ function initApp() {
           await fetchDates();
           await fetchMonths();
         } else {
-          showNotification(t('sync_db_failed') + res.statusText, 'error');
+          let errMsg = res.statusText;
+          try {
+            const data = await res.json();
+            if (data && data.error) errMsg = data.error;
+          } catch (_) {}
+          showNotification(t('sync_db_failed') + errMsg, 'error');
         }
       } catch (err) {
         console.error('Sync failed:', err);

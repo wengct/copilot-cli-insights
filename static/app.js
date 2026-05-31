@@ -11,6 +11,14 @@ let currentSessionOutputTokens = 0;
 let currentSessionReasoningTokens = 0;
 let currentSessionCwd = '';
 let currentSessionModel = '';
+let availableDates = [];
+
+function getLocalDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 // Session table sorting state
 let currentSessions = [];
@@ -34,6 +42,8 @@ const i18n = {
     tab_daily: '📊 每日即時',
     tab_monthly: '📅 月度彙整',
     select_date: '選擇日期',
+    today_btn: '今日',
+    detected_new_day: '已跨日，自動切換至新的一天：',
     select_month: '選擇月份',
     loading: '載入中...',
     no_logs: '無使用日誌記錄',
@@ -168,6 +178,8 @@ const i18n = {
     tab_daily: '📊 Daily Real-time',
     tab_monthly: '📅 Monthly Summary',
     select_date: 'Select Date',
+    today_btn: 'Today',
+    detected_new_day: 'Cross-day detected, auto switching to: ',
     select_month: 'Select Month',
     loading: 'Loading...',
     no_logs: 'No usage logs found',
@@ -398,6 +410,30 @@ function initApp() {
     }
   });
 
+  // 點擊整個輸入框時自動打開小日曆
+  dateSelect.addEventListener('click', (e) => {
+    if (typeof e.target.showPicker === 'function') {
+      try {
+        e.target.showPicker();
+      } catch (err) {
+        console.warn('showPicker not supported or blocked:', err);
+      }
+    }
+  });
+
+  // 監聽今日按鈕
+  const btnToday = document.getElementById('btn-today');
+  if (btnToday) {
+    btnToday.addEventListener('click', async () => {
+      const todayStr = getLocalDateString();
+      if (dateSelect) {
+        dateSelect.value = todayStr;
+      }
+      await loadUsageData(todayStr);
+      showNotification(`${t('today_btn') || '今日'} ${todayStr}`, 'success');
+    });
+  }
+
   // 監聽月份切換
   monthSelect.addEventListener('change', (e) => {
     if (e.target.value) {
@@ -553,22 +589,24 @@ function switchTab(tab) {
 function toggleLiveRefresh(enabled) {
   const panel = document.getElementById('live-settings-panel');
   const dateSelect = document.getElementById('date-select');
+  const btnToday = document.getElementById('btn-today');
 
   if (enabled) {
     panel.style.display = 'block';
     dateSelect.disabled = true; // 鎖定日期選擇
+    if (btnToday) btnToday.disabled = true; // 鎖定今日按鈕
 
-    // 自動切換到最新的一天
-    if (dateSelect.options.length > 0) {
-      dateSelect.selectedIndex = 0;
-      loadUsageData(dateSelect.value);
-    }
+    // 自動切換到當天的日期 (以今天日期進行即時監控)
+    const todayStr = getLocalDateString();
+    dateSelect.value = todayStr;
+    loadUsageData(todayStr);
 
     startLiveRefresh();
     showNotification(t('live_refresh_enabled'), 'success');
   } else {
     panel.style.display = 'none';
     dateSelect.disabled = false;
+    if (btnToday) btnToday.disabled = false;
 
     stopLiveRefresh();
     showNotification(t('live_refresh_disabled'), 'info');
@@ -626,24 +664,26 @@ async function refreshLiveData() {
   try {
     const res = await fetch('/api/dates');
     const data = await res.json();
+    availableDates = data.dates || [];
     
-    if (data.dates && data.dates.length > 0) {
-      const dateSelect = document.getElementById('date-select');
-      const latestDate = data.dates[0];
-
-      // 更新 Date select 的選項
-      dateSelect.innerHTML = '';
-      data.dates.forEach((date, idx) => {
-        const opt = document.createElement('option');
-        opt.value = date;
-        opt.textContent = date;
-        if (idx === 0) opt.selected = true;
-        dateSelect.appendChild(opt);
-      });
-
-      // 載入最新日期數據
-      await loadUsageData(latestDate);
+    const dateSelect = document.getElementById('date-select');
+    const todayStr = getLocalDateString();
+    
+    // 更新日曆的最小與最大限制
+    if (availableDates.length > 0) {
+      dateSelect.min = availableDates[availableDates.length - 1];
     }
+    dateSelect.max = todayStr;
+
+    // 即時自動刷新跨日支援：若目前時間已進入新的一天且與當前選擇不同，自動切換
+    if (dateSelect.value !== todayStr) {
+      console.log(`即時監控跨日切換: ${dateSelect.value} -> ${todayStr}`);
+      dateSelect.value = todayStr;
+      showNotification(`${t('detected_new_day') || '已跨日，自動切換至新的一天：'}${todayStr}`, 'info');
+    }
+
+    // 載入所選日期 (即新的 todayStr) 數據
+    await loadUsageData(dateSelect.value);
   } catch (err) {
     console.error('即時刷新失敗:', err);
     const statusText = document.getElementById('live-status-text');
@@ -660,35 +700,35 @@ async function fetchDates(selectedDate = null) {
     const data = await res.json();
     
     const dateSelect = document.getElementById('date-select');
-    dateSelect.innerHTML = '';
+    availableDates = data.dates || [];
 
-    if (!data.dates || data.dates.length === 0) {
-      dateSelect.innerHTML = `<option value="" disabled selected>${t('no_logs')}</option>`;
+    if (availableDates.length === 0) {
       toggleEmptyState(true);
       return;
     }
 
     toggleEmptyState(false);
-    let dateToLoad = data.dates[0];
-    let hasSelected = false;
+    
+    // 設定日曆最小與最大值
+    const oldestDate = availableDates[availableDates.length - 1];
+    const newestDate = availableDates[0];
+    const todayStr = getLocalDateString();
+    
+    dateSelect.min = oldestDate;
+    dateSelect.max = todayStr;
 
-    data.dates.forEach((date) => {
-      const opt = document.createElement('option');
-      opt.value = date;
-      opt.textContent = date;
-      if (selectedDate && date === selectedDate) {
-        opt.selected = true;
-        dateToLoad = date;
-        hasSelected = true;
-      }
-      dateSelect.appendChild(opt);
-    });
-
-    if (!hasSelected) {
-      if (dateSelect.options.length > 0) {
-        dateSelect.options[0].selected = true;
+    let dateToLoad = selectedDate;
+    if (!dateToLoad) {
+      // 若有啟用即時刷新，預設為今日；否則預設為最新有日誌的日期
+      const liveToggle = document.getElementById('live-toggle');
+      if (liveToggle && liveToggle.checked) {
+        dateToLoad = todayStr;
+      } else {
+        dateToLoad = newestDate;
       }
     }
+
+    dateSelect.value = dateToLoad;
 
     // 載入所選或最新一天的數據
     await loadUsageData(dateToLoad);
@@ -2065,24 +2105,7 @@ function switchToDailyDate(date) {
   const dateSelect = document.getElementById('date-select');
   if (!dateSelect) return;
 
-  // 檢查該日期是否存在於 select 選項中
-  let exists = false;
-  for (let i = 0; i < dateSelect.options.length; i++) {
-    if (dateSelect.options[i].value === date) {
-      dateSelect.selectedIndex = i;
-      exists = true;
-      break;
-    }
-  }
-
-  // 如果不存在，動態新增一個 option
-  if (!exists) {
-    const opt = document.createElement('option');
-    opt.value = date;
-    opt.textContent = date;
-    dateSelect.appendChild(opt);
-    dateSelect.value = date;
-  }
+  dateSelect.value = date;
 
   // 切換 Tab 到 daily
   if (activeTab === 'daily') {

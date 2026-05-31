@@ -43,11 +43,15 @@
       <!-- Section 1: Daily Selector (for daily tab) -->
       <div class="sidebar-section" id="daily-selector-section">
         <h3 data-i18n="select_date">選擇日期</h3>
-        <div class="date-selector-wrapper" style="display: flex; gap: 8px; width: 100%;">
-          <select id="date-select" class="premium-select" style="flex: 1;">
-            <option value="" disabled selected data-i18n="loading">載入中...</option>
-          </select>
-          <button id="btn-reload-daily" class="reload-btn" data-i18n-title="reload_data" title="重新載入數據">🔄</button>
+        <div class="date-selector-wrapper" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+          <div style="display: flex; gap: 8px; width: 100%;">
+            <input type="date" id="date-select" class="premium-date-input" style="flex: 1;">
+            <button id="btn-reload-daily" class="reload-btn" data-i18n-title="reload_data" title="重新載入數據">🔄</button>
+          </div>
+          <button id="btn-today" class="today-btn" style="width: 100%;">
+            <span>📅</span>
+            <span data-i18n="today_btn">今日</span>
+          </button>
         </div>
         
         <!-- Live Monitor Toggle -->

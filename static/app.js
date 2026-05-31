@@ -1917,11 +1917,11 @@ function renderMonthlyDailySummaryTable(dailyBreakdown) {
 
     tr.innerHTML = `
       <td style="font-weight: 600; color: var(--accent-cyan);">${escapeHtml(entry.date)}</td>
-      <td>${formatToken(entry.total_input_tokens)}</td>
-      <td>${formatToken(entry.total_output_tokens)}</td>
-      <td>${formatToken(entry.total_reasoning_tokens || 0)}</td>
-      <td>${formatToken(entry.total_cache_read_tokens || 0)}</td>
-      <td style="font-weight: 700; color: var(--accent-cyan);">${formatToken(entry.total_tokens)}</td>
+      <td style="color: var(--text-secondary);">${formatToken(entry.total_input_tokens || 0)}</td>
+      <td style="color: var(--text-secondary);">${formatToken(entry.total_output_tokens || 0)}</td>
+      <td style="color: #a78bfa;">${formatToken(entry.total_reasoning_tokens || 0)}</td>
+      <td style="color: #34d399;">${formatToken(entry.total_cache_read_tokens || 0)}</td>
+      <td style="font-weight: 700; color: #fbbf24;">${formatToken(entry.total_tokens)}</td>
     `;
     tbody.appendChild(tr);
   });

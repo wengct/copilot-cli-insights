@@ -25,6 +25,10 @@ let currentSessions = [];
 let currentSortColumn = 'timestamp'; // Default sorted by starting time
 let currentSortDirection = 'desc';  // Default chronological order
 
+// Monthly daily summary sorting state
+let monthlyDailySortColumn = 'date';
+let monthlyDailySortDirection = 'desc';
+
 // Live Auto-Refresh State
 let liveRefreshTimer = null;
 let liveProgressTimer = null;
@@ -1053,23 +1057,37 @@ function initTableSorting() {
   headers.forEach(th => {
     th.addEventListener('click', () => {
       const column = th.getAttribute('data-sort');
-      if (currentSortColumn === column) {
-        // 切換排序方向
-        currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+      const tableType = th.getAttribute('data-table');
+      
+      if (tableType === 'monthly') {
+        // 月度每日彙總表格排序
+        if (monthlyDailySortColumn === column) {
+          monthlyDailySortDirection = monthlyDailySortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+          monthlyDailySortColumn = column;
+          monthlyDailySortDirection = 'desc'; // 預設降冪排序
+        }
+        sortAndRenderMonthlyDailyTable();
       } else {
-        currentSortColumn = column;
-        // 數值欄位預設由大到小排序，字串/時間欄位預設由小到大排序
-        const numericColumns = [
-          'max_turn_no', 
-          'total_input_tokens', 
-          'total_output_tokens', 
-          'total_cache_read_tokens', 
-          'total_tokens', 
-          'duration_ms'
-        ];
-        currentSortDirection = numericColumns.includes(column) ? 'desc' : 'asc';
+        // 會話列表排序
+        if (currentSortColumn === column) {
+          // 切換排序方向
+          currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+          currentSortColumn = column;
+          // 數值欄位預設由大到小排序，字串/時間欄位預設由小到大排序
+          const numericColumns = [
+            'max_turn_no', 
+            'total_input_tokens', 
+            'total_output_tokens', 
+            'total_cache_read_tokens', 
+            'total_tokens', 
+            'duration_ms'
+          ];
+          currentSortDirection = numericColumns.includes(column) ? 'desc' : 'asc';
+        }
+        sortAndRenderSessionTable();
       }
-      sortAndRenderSessionTable();
     });
   });
 }
@@ -1104,7 +1122,7 @@ function sortAndRenderSessionTable() {
 }
 
 function updateSortHeadersUI() {
-  const headers = document.querySelectorAll('.premium-table th.sortable');
+  const headers = document.querySelectorAll('.premium-table th.sortable:not([data-table="monthly"])');
   headers.forEach(th => {
     const column = th.getAttribute('data-sort');
     const icon = th.querySelector('.sort-icon');
@@ -1639,7 +1657,9 @@ function renderMonthlyDashboard(data) {
   renderMonthlyModelsTable(top_models);
 
   // 6. 渲染當月每日彙總列表
-  renderMonthlyDailySummaryTable(daily_breakdown);
+  monthlyDailySortColumn = 'date';
+  monthlyDailySortDirection = 'desc';
+  sortAndRenderMonthlyDailyTable();
 }
 
 // =========================================================================
@@ -1886,10 +1906,7 @@ function renderMonthlyDailySummaryTable(dailyBreakdown) {
     return;
   }
 
-  // 依日期大到小排序 (最新日期在最上面)
-  const sortedBreakdown = [...dailyBreakdown].sort((a, b) => b.date.localeCompare(a.date));
-
-  sortedBreakdown.forEach(entry => {
+  dailyBreakdown.forEach(entry => {
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     
@@ -1907,6 +1924,70 @@ function renderMonthlyDailySummaryTable(dailyBreakdown) {
       <td style="font-weight: 700; color: var(--accent-cyan);">${formatToken(entry.total_tokens)}</td>
     `;
     tbody.appendChild(tr);
+  });
+}
+
+function sortAndRenderMonthlyDailyTable() {
+  if (!currentMonthlyBreakdown || currentMonthlyBreakdown.length === 0) {
+    renderMonthlyDailySummaryTable([]);
+    return;
+  }
+
+  currentMonthlyBreakdown.sort((a, b) => {
+    let valA, valB;
+    if (monthlyDailySortColumn === 'date') {
+      valA = a.date;
+      valB = b.date;
+    } else {
+      const keyMap = {
+        'input': 'total_input_tokens',
+        'output': 'total_output_tokens',
+        'reasoning': 'total_reasoning_tokens',
+        'cache': 'total_cache_read_tokens',
+        'total': 'total_tokens'
+      };
+      const field = keyMap[monthlyDailySortColumn] || monthlyDailySortColumn;
+      valA = a[field];
+      valB = b[field];
+    }
+
+    // 空值處理
+    if (valA === undefined || valA === null) valA = 0;
+    if (valB === undefined || valB === null) valB = 0;
+
+    if (typeof valA === 'string' && typeof valB === 'string') {
+      return monthlyDailySortDirection === 'asc' 
+        ? valA.localeCompare(valB) 
+        : valB.localeCompare(valA);
+    }
+
+    return monthlyDailySortDirection === 'asc' ? valA - valB : valB - valA;
+  });
+
+  renderMonthlyDailySummaryTable(currentMonthlyBreakdown);
+  updateMonthlySortHeadersUI();
+}
+
+function updateMonthlySortHeadersUI() {
+  const headers = document.querySelectorAll('.premium-table th.sortable[data-table="monthly"]');
+  headers.forEach(th => {
+    const column = th.getAttribute('data-sort');
+    const icon = th.querySelector('.sort-icon');
+    if (!icon) return;
+
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    
+    if (column === monthlyDailySortColumn) {
+      if (monthlyDailySortDirection === 'asc') {
+        th.classList.add('sorted-asc');
+        icon.innerHTML = '▴';
+      } else {
+        th.classList.add('sorted-desc');
+        icon.innerHTML = '▾';
+      }
+    } else {
+      icon.innerHTML = '<span class="sort-icon-placeholder">▴▾</span>';
+    }
   });
 }
 

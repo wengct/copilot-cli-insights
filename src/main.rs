@@ -33,7 +33,7 @@ async fn main() {
 
     // 監聽本地 3000 Port
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("🚀 GitHub Copilot CLI Insights Dashboard is running on: http://localhost:3000");
+    println!("🚀 GitHub Copilot CLI Token Insights Dashboard is running on: http://localhost:3000");
     
     axum::serve(listener, app).await.unwrap();
 }

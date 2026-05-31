@@ -1,4 +1,4 @@
-# 🤖 GitHub Copilot CLI Insights Dashboard
+# 🤖 GitHub Copilot CLI Token Insights Dashboard
 
 [English Version (英文版)](./README.en.md)
 
@@ -127,7 +127,7 @@ cargo run
 
 當終端機顯示以下成功訊息時：
 ```text
-🚀 GitHub Copilot CLI Insights Dashboard is running on: http://localhost:3000
+🚀 GitHub Copilot CLI Token Insights Dashboard is running on: http://localhost:3000
 ```
 請在瀏覽器中打開 [**`http://localhost:3000`**](http://localhost:3000)，即可開始使用您的看板！
 

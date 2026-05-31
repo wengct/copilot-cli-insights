@@ -1,5 +1,5 @@
 [Unit]
-Description=GitHub Copilot CLI Insights Dashboard Service
+Description=GitHub Copilot CLI Token Insights Dashboard Service
 After=network.target
 
 [Service]

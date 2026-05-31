@@ -38,7 +38,7 @@ let currentMonthlyData = null;
 
 const i18n = {
   'zh-TW': {
-    title: 'GitHub Copilot CLI 使用量看板',
+    title: 'GitHub Copilot CLI Token Insights Dashboard',
     tab_daily: '📊 每日即時',
     tab_monthly: '📅 月度彙整',
     select_date: '選擇日期',
@@ -163,7 +163,7 @@ const i18n = {
     setup_troubleshooting: '⚠️ 除錯與檢查 (Troubleshooting)：',
     setup_troubleshoot_a: '🔍 <strong>A. 若狀態列未正常出現，請先單獨測試腳本是否能正常執行：</strong>',
     setup_troubleshoot_b: '🔍 <strong>B. 請確認 <code>settings.json</code> 是合法的 JSON 格式：</strong>',
-    empty_title: '歡迎使用 Copilot CLI Insights Dashboard',
+    empty_title: '歡迎使用 GitHub Copilot CLI Token Insights Dashboard',
     empty_desc: '我們偵測到您的 <code>~/.copilot</code> 本地目錄中目前沒有使用數據。這是因為您還沒有啟用 GitHub Copilot CLI 的 Status Line 並部署數據收集腳本。請點選下方按鈕查看啟用教學！',
     btn_empty_setup: '⚙️ 啟用前置設定教學',
     btn_empty_refresh: '🔄 重新整理檢查',
@@ -174,7 +174,7 @@ const i18n = {
     cache_prefix: '快取: ',
   },
   'en': {
-    title: 'GitHub Copilot CLI Insights Dashboard',
+    title: 'GitHub Copilot CLI Token Insights Dashboard',
     tab_daily: '📊 Daily Real-time',
     tab_monthly: '📅 Monthly Summary',
     select_date: 'Select Date',
@@ -299,7 +299,7 @@ const i18n = {
     setup_troubleshooting: '⚠️ Troubleshooting:',
     setup_troubleshoot_a: '🔍 <strong>A. If the status line doesn\'t appear, test if the script runs standalone:</strong>',
     setup_troubleshoot_b: '🔍 <strong>B. Please verify if settings.json is a valid JSON format:</strong>',
-    empty_title: 'Welcome to Copilot CLI Insights Dashboard',
+    empty_title: 'Welcome to GitHub Copilot CLI Token Insights Dashboard',
     empty_desc: 'We detected that there is currently no usage data in your local <code>~/.copilot</code> directory. This is because you haven\'t enabled the GitHub Copilot CLI Status Line or deployed the data collection script. Please click the button below to view the setup guide!',
     btn_empty_setup: '⚙️ View Setup Guide',
     btn_empty_refresh: '🔄 Reload and Check',

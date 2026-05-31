@@ -1,4 +1,4 @@
-# 🤖 GitHub Copilot CLI Insights Dashboard
+# 🤖 GitHub Copilot CLI Token Insights Dashboard
 
 [繁體中文版 (Traditional Chinese Version)](./README.md)
 
@@ -127,7 +127,7 @@ cargo run
 
 Once the terminal displays the success message:
 ```text
-🚀 GitHub Copilot CLI Insights Dashboard is running on: http://localhost:3000
+🚀 GitHub Copilot CLI Token Insights Dashboard is running on: http://localhost:3000
 ```
 Open [**`http://localhost:3000`**](http://localhost:3000) in your browser to start exploring!
 

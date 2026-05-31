@@ -123,6 +123,8 @@ const i18n = {
     sender_user: '👤 USER',
     sender_agent: '🤖 COPILOT AGENT',
     thinking_tools: '思考中：調用工具指令...',
+    copy_markdown: '複製 Markdown',
+    copy_markdown_title: '複製 LLM 回答的原始 Markdown 內容',
     no_returned_data: '無回傳資料',
     data_truncated: '... [資料過長已被看板截斷顯示] ...',
     tool_arguments: '調用參數 (Arguments)',
@@ -264,6 +266,8 @@ const i18n = {
     sender_user: '👤 USER',
     sender_agent: '🤖 COPILOT AGENT',
     thinking_tools: 'Thinking: Calling tool commands...',
+    copy_markdown: 'Copy Markdown',
+    copy_markdown_title: 'Copy raw Markdown response',
     no_returned_data: 'No returned data',
     data_truncated: '... [Data too long, truncated by the dashboard] ...',
     tool_arguments: 'Arguments',
@@ -1308,7 +1312,7 @@ function renderTimeline(data) {
         if (!replyMarkdown && item.event_data.tool_requests && item.event_data.tool_requests.length > 0) {
           replyHtml = `<span style="font-style: italic; color: var(--text-muted);">${t('thinking_tools')}</span>`;
         } else {
-          replyHtml = marked.parse(replyMarkdown);
+          replyHtml = marked.parse(replyMarkdown || '');
         }
 
         // 建立詳細 Token 資訊區塊 (in, out, reasoning, cache, total)
@@ -1325,6 +1329,15 @@ function renderTimeline(data) {
           `;
         }
 
+        let copyButtonHtml = '';
+        if (replyMarkdown) {
+          copyButtonHtml = `
+            <button class="copy-markdown-btn" title="${t('copy_markdown_title')}">
+              📋 <span class="btn-text">${t('copy_markdown')}</span>
+            </button>
+          `;
+        }
+
         div.innerHTML = `
           <div class="timeline-dot"></div>
           <div class="assistant-bubble">
@@ -1332,12 +1345,37 @@ function renderTimeline(data) {
               <span class="sender">${t('sender_agent')} (${escapeHtml(model)})</span>
               <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 ${tokenBadge}
+                ${copyButtonHtml}
                 <span class="time">${timeStr}</span>
               </div>
             </div>
             <div class="reply-content">${replyHtml}</div>
           </div>
         `;
+
+        // 綁定複製 Markdown 事件
+        if (replyMarkdown) {
+          const copyBtn = div.querySelector('.copy-markdown-btn');
+          if (copyBtn) {
+            copyBtn.addEventListener('click', () => {
+              navigator.clipboard.writeText(replyMarkdown).then(() => {
+                const btnTextEl = copyBtn.querySelector('.btn-text');
+                const originalText = btnTextEl ? btnTextEl.textContent : 'Copy Markdown';
+                if (btnTextEl) btnTextEl.textContent = t('copy_success');
+                copyBtn.classList.add('copied');
+                
+                setTimeout(() => {
+                  if (btnTextEl) btnTextEl.textContent = originalText;
+                  copyBtn.classList.remove('copied');
+                }, 2000);
+              }).catch((err) => {
+                console.error('Failed to copy text: ', err);
+                showNotification(t('copy_failed'), 'error');
+              });
+            });
+          }
+        }
+
         break;
       }
 

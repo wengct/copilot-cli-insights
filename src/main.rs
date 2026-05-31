@@ -1113,6 +1113,7 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
 async fn trigger_manual_sync() -> impl IntoResponse {
     let res = tokio::task::spawn_blocking(|| {
         let conn = db::get_db_conn()?;
+        db::init_db(&conn)?; // 確保資料庫與資料表已被成功初始化（若檔案被刪除會自動重建）
         db::sync_usage_logs(&conn)
     }).await.unwrap_or_else(|_| Err("執行緒執行失敗".to_string()));
 

@@ -1660,6 +1660,41 @@ input:checked + .slider-round:before {
   transform: translateY(0);
 }
 
+/* Sync Database Button */
+.sync-db-btn {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(236, 72, 153, 0.15) 100%);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--shadow-sm);
+  outline: none;
+}
+
+.sync-db-btn:hover {
+  transform: translateY(-2px);
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.25) 0%, rgba(236, 72, 153, 0.25) 100%);
+  border-color: #a855f7;
+  box-shadow: 0 0 15px rgba(168, 85, 247, 0.35);
+}
+
+.sync-db-btn:active {
+  transform: translateY(0);
+}
+
+.sync-db-btn.loading {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
 /* Center-aligned Modal */
 .modal-overlay {
   position: fixed;

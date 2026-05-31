@@ -172,6 +172,11 @@ const i18n = {
     loading_month_prefix: '載入月份數據中: ',
     monthly_report: '月度統計報告：',
     cache_prefix: '快取: ',
+    sync_db: '⚡ 同步資料',
+    sync_db_title: '立即同步日誌檔到 SQLite 資料庫',
+    sync_db_loading: '正在同步日誌檔到資料庫...',
+    sync_db_success: '✅ 資料庫同步成功！',
+    sync_db_failed: '❌ 同步失敗: ',
   },
   'en': {
     title: 'GitHub Copilot CLI Token Insights Dashboard',
@@ -308,6 +313,11 @@ const i18n = {
     loading_month_prefix: 'Loading Monthly Data: ',
     monthly_report: 'Monthly Report: ',
     cache_prefix: 'Cache: ',
+    sync_db: '⚡ Sync Data',
+    sync_db_title: 'Sync local logs to SQLite database now',
+    sync_db_loading: 'Syncing log files to database...',
+    sync_db_success: '✅ Database synced successfully!',
+    sync_db_failed: '❌ Sync failed: ',
   }
 };
 
@@ -469,6 +479,39 @@ function initApp() {
         showNotification(t('reload_failed'), 'error');
       } finally {
         btnReloadMonthly.classList.remove('loading');
+      }
+    });
+  }
+
+  // 監聽手動同步資料庫按鈕
+  const btnSyncDb = document.getElementById('btn-sync-db');
+  if (btnSyncDb) {
+    btnSyncDb.addEventListener('click', async () => {
+      btnSyncDb.classList.add('loading');
+      btnSyncDb.disabled = true;
+      showNotification(t('sync_db_loading'), 'info');
+      try {
+        const res = await fetch('/api/sync');
+        if (res.ok) {
+          showNotification(t('sync_db_success'), 'success');
+          // 重新載入目前頁面的數據
+          if (activeTab === 'daily') {
+            await reloadDailyData();
+          } else {
+            await reloadMonthlyData();
+          }
+          // 同時重新整理可用的日期與月份清單
+          await fetchDates();
+          await fetchMonths();
+        } else {
+          showNotification(t('sync_db_failed') + res.statusText, 'error');
+        }
+      } catch (err) {
+        console.error('Sync failed:', err);
+        showNotification(t('sync_db_failed') + err.message, 'error');
+      } finally {
+        btnSyncDb.classList.remove('loading');
+        btnSyncDb.disabled = false;
       }
     });
   }

@@ -42,6 +42,7 @@ async fn main() {
         .route("/api/session/:session_id", get(get_session_details))
         .route("/api/months", get(get_available_months))
         .route("/api/monthly/:year_month", get(get_monthly_details))
+        .route("/api/sync", get(trigger_manual_sync))
         // 靜態檔案路由： fallback 到 static/index.html，並將所有 / 請求導向 static 目錄
         .nest_service("/static", ServeDir::new("static"))
         .fallback_service(ServeDir::new("static"))
@@ -1107,4 +1108,16 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
         top_models,
         top_projects,
     }).into_response()
+}
+
+async fn trigger_manual_sync() -> impl IntoResponse {
+    let res = tokio::task::spawn_blocking(|| {
+        let conn = db::get_db_conn()?;
+        db::sync_usage_logs(&conn)
+    }).await.unwrap_or_else(|_| Err("執行緒執行失敗".to_string()));
+
+    match res {
+        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "success", "message": "資料庫增量同步已完成！" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "status": "error", "error": e }))).into_response(),
+    }
 }

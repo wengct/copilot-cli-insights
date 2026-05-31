@@ -179,6 +179,9 @@ const i18n = {
     sync_db_loading: '正在同步日誌檔到資料庫...',
     sync_db_success: '資料庫同步成功！',
     sync_db_failed: '同步失敗: ',
+    monthly_daily_summary_title: '📅 當月每日彙總',
+    col_date: '日期',
+    placeholder_no_daily_summary: '本月無每日彙總數據',
   },
   'en': {
     title: 'GitHub Copilot CLI Token Insights Dashboard',
@@ -322,6 +325,9 @@ const i18n = {
     sync_db_loading: 'Syncing log files to database...',
     sync_db_success: 'Database synced successfully!',
     sync_db_failed: 'Sync failed: ',
+    monthly_daily_summary_title: '📅 Daily Summary of the Month',
+    col_date: 'Date',
+    placeholder_no_daily_summary: 'No daily summary data this month',
   }
 };
 
@@ -1631,6 +1637,9 @@ function renderMonthlyDashboard(data) {
 
   // 5. 渲染模型佔比列表
   renderMonthlyModelsTable(top_models);
+
+  // 6. 渲染當月每日彙總列表
+  renderMonthlyDailySummaryTable(daily_breakdown);
 }
 
 // =========================================================================
@@ -1860,6 +1869,42 @@ function renderMonthlyModelsTable(models) {
         ${formatToken(m.total_tokens)}
         ${m.total_cache_read_tokens ? `<div style="font-size: 0.72rem; font-weight: normal; color: #a5b4fc; margin-top: 3px;" title="${t('chart_cache_label')}">${t('cache_prefix')}${formatToken(m.total_cache_read_tokens)}</div>` : ''}
       </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// =========================================================================
+// 渲染當月每日彙總 Table
+// =========================================================================
+function renderMonthlyDailySummaryTable(dailyBreakdown) {
+  const tbody = document.getElementById('monthly-daily-summary-body');
+  tbody.innerHTML = '';
+
+  if (!dailyBreakdown || dailyBreakdown.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="placeholder-text">${t('placeholder_no_daily_summary')}</td></tr>`;
+    return;
+  }
+
+  // 依日期大到小排序 (最新日期在最上面)
+  const sortedBreakdown = [...dailyBreakdown].sort((a, b) => b.date.localeCompare(a.date));
+
+  sortedBreakdown.forEach(entry => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    
+    // 點選整列可跳轉並帶入該日期查詢
+    tr.addEventListener('click', () => {
+      switchToDailyDate(entry.date);
+    });
+
+    tr.innerHTML = `
+      <td style="font-weight: 600; color: var(--accent-cyan);">${escapeHtml(entry.date)}</td>
+      <td>${formatToken(entry.total_input_tokens)}</td>
+      <td>${formatToken(entry.total_output_tokens)}</td>
+      <td>${formatToken(entry.total_reasoning_tokens || 0)}</td>
+      <td>${formatToken(entry.total_cache_read_tokens || 0)}</td>
+      <td style="font-weight: 700; color: var(--accent-cyan);">${formatToken(entry.total_tokens)}</td>
     `;
     tbody.appendChild(tr);
   });

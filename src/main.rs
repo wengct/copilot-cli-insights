@@ -837,6 +837,7 @@ struct DailyBreakdownEntry {
     total_input_tokens: u64,
     total_output_tokens: u64,
     total_cache_read_tokens: u64,
+    total_reasoning_tokens: u64,
     total_duration_ms: u64,
     total_requests: u64,
 }
@@ -1062,6 +1063,7 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
             total_input_tokens: day_input,
             total_output_tokens: day_output,
             total_cache_read_tokens: day_cache_read,
+            total_reasoning_tokens: day_reasoning,
             total_duration_ms: day_duration,
             total_requests: day_requests,
         });

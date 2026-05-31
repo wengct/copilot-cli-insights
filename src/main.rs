@@ -1,0 +1,941 @@
+use axum::{
+    extract::Path,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, Read},
+    path::PathBuf,
+};
+use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
+
+#[tokio::main]
+async fn main() {
+    // 建立 Axum 路由
+    let app = Router::new()
+        // API 路由
+        .route("/api/dates", get(get_available_dates))
+        .route("/api/setup-info", get(get_setup_info))
+        .route("/api/usage/:date", get(get_usage_details))
+        .route("/api/session/:session_id", get(get_session_details))
+        .route("/api/months", get(get_available_months))
+        .route("/api/monthly/:year_month", get(get_monthly_details))
+        // 靜態檔案路由： fallback 到 static/index.html，並將所有 / 請求導向 static 目錄
+        .nest_service("/static", ServeDir::new("static"))
+        .fallback_service(ServeDir::new("static"))
+        .layer(CorsLayer::permissive());
+
+    // 監聽本地 3000 Port
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    println!("🚀 GitHub Copilot CLI Insights Dashboard is running on: http://localhost:3000");
+    
+    axum::serve(listener, app).await.unwrap();
+}
+
+/// 獲取 .copilot 的基準路徑
+/// 1. 優先使用環境變數 `COPILOT_DIR`
+/// 2. 其次使用主目錄下的 `~/.copilot`
+fn get_copilot_dir() -> Result<PathBuf, String> {
+    if let Ok(val) = std::env::var("COPILOT_DIR") {
+        let p = PathBuf::from(val);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let p = home.join(".copilot");
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // 備用方案：偵測 WSL 下 /home/chenting/.copilot
+    let backup = PathBuf::from("/home/chenting/.copilot");
+    if backup.exists() {
+        return Ok(backup);
+    }
+
+    Err("無法定位 .copilot 資料夾，請設定 COPILOT_DIR 環境變數。".to_string())
+}
+
+#[derive(Serialize)]
+struct SetupInfoResponse {
+    workspace_dir: String,
+    script_path: String,
+    copilot_dir: String,
+    copilot_dir_exists: bool,
+    home_dir: String,
+}
+
+async fn get_setup_info() -> impl IntoResponse {
+    let workspace_dir = match std::env::current_dir() {
+        Ok(dir) => dir.to_string_lossy().into_owned(),
+        Err(_) => "".to_string(),
+    };
+
+    let script_path = if !workspace_dir.is_empty() {
+        let mut p = PathBuf::from(&workspace_dir);
+        p.push("shell");
+        p.push("statusline-token.sh");
+        p.to_string_lossy().into_owned()
+    } else {
+        "".to_string()
+    };
+
+    let home_dir_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
+    let home_dir_str = home_dir_path.to_string_lossy().into_owned();
+
+    let copilot_dir_path = home_dir_path.join(".copilot");
+    let copilot_dir_exists = copilot_dir_path.exists();
+    let copilot_dir_str = copilot_dir_path.to_string_lossy().into_owned();
+
+    Json(SetupInfoResponse {
+        workspace_dir,
+        script_path,
+        copilot_dir: copilot_dir_str,
+        copilot_dir_exists,
+        home_dir: home_dir_str,
+    })
+}
+
+
+/// 解析使用量日誌檔案，相容單行 JSONL 與多行美化（Prettified）JSON 格式
+fn parse_usage_entries(content: &str) -> Vec<UsageEntry> {
+    let mut entries: Vec<UsageEntry> = Vec::new();
+    let mut current_obj = String::new();
+    let mut in_object = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // 1. 先嘗試單行解析（相容標準 JSONL）
+        if !in_object && trimmed.starts_with('{') && trimmed.ends_with('}') {
+            match serde_json::from_str::<UsageEntry>(trimmed) {
+                Ok(entry) => {
+                    entries.push(entry);
+                    continue;
+                }
+                Err(_) => {
+                    // 若失敗則嘗試進入多行解析邏輯
+                }
+            }
+        }
+
+        // 2. 多行解析邏輯
+        if !in_object {
+            if trimmed.starts_with('{') {
+                in_object = true;
+                current_obj.clear();
+                current_obj.push_str(line);
+                current_obj.push('\n');
+            }
+        } else {
+            current_obj.push_str(line);
+            current_obj.push('\n');
+
+            // 判斷是否為根閉合大括號 `}`（無空格/縮排）
+            let is_root_close = line.trim_end() == "}" && !line.starts_with(' ') && !line.starts_with('\t');
+            if is_root_close {
+                match serde_json::from_str::<UsageEntry>(&current_obj) {
+                    Ok(entry) => entries.push(entry),
+                    Err(e) => {
+                        eprintln!("解析日誌項錯誤 (跳過): {}", e);
+                    }
+                }
+                in_object = false;
+                current_obj.clear();
+            }
+        }
+    }
+    entries
+}
+
+// =========================================================================
+// API 1: 列出所有可用的日誌日期
+// =========================================================================
+
+#[derive(Serialize)]
+struct DateListResponse {
+    dates: Vec<String>,
+}
+
+async fn get_available_dates() -> impl IntoResponse {
+    let copilot_dir = match get_copilot_dir() {
+        Ok(dir) => dir,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let usage_dir = copilot_dir.join("usage");
+    if !usage_dir.exists() {
+        return Json(DateListResponse { dates: vec![] }).into_response();
+    }
+
+    let mut dates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(usage_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    let filename = entry.file_name().to_string_lossy().into_owned();
+                    // 檔名格式符合 usage-YYYY-MM-DD.jsonl
+                    if filename.starts_with("usage-") && filename.ends_with(".jsonl") {
+                        let date_str = filename
+                            .trim_start_matches("usage-")
+                            .trim_end_matches(".jsonl");
+                        dates.push(date_str.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 由新到舊排序
+    dates.sort_by(|a, b| b.cmp(a));
+
+    Json(DateListResponse { dates }).into_response()
+}
+
+// =========================================================================
+// API 2: 獲取特定日期的使用量與 Token 狀況
+// =========================================================================
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct TokenStats {
+    input: u64,
+    output: u64,
+    cache_read: Option<u64>,
+    cache_write: Option<u64>,
+    reasoning: Option<u64>,
+    total: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ContextStats {
+    current_context_tokens: Option<u64>,
+    displayed_context_limit: Option<u64>,
+    current_context_used_percentage: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CostStats {
+    total_api_duration_ms: Option<f64>,
+    total_duration_ms: Option<f64>,
+    total_premium_requests: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct UsageEntry {
+    timestamp: String,
+    session_id: String,
+    session_name: Option<String>,
+    transcript_path: Option<String>,
+    cwd: Option<String>,
+    version: Option<String>,
+    turn_no: u32,
+    model: Option<String>,
+    model_id: Option<String>,
+    tokens: Option<TokenStats>,
+    delta_tokens: Option<TokenStats>,
+    context: Option<ContextStats>,
+    cost: Option<CostStats>,
+}
+
+#[derive(Serialize)]
+struct UsageDetailsResponse {
+    date: String,
+    summary: DaySummary,
+    sessions: Vec<SessionSummary>,
+    raw_entries: Vec<UsageEntry>,
+}
+
+#[derive(Serialize, Default)]
+struct DaySummary {
+    total_sessions: usize,
+    total_tokens: u64,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_reasoning_tokens: u64,
+    total_cache_read_tokens: u64,
+    total_duration_ms: u64,
+    total_requests: u64,
+}
+
+#[derive(Serialize)]
+struct SessionSummary {
+    session_id: String,
+    session_name: String,
+    cwd: String,
+    model: String,
+    total_tokens: u64,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_cache_read_tokens: u64,
+    total_reasoning_tokens: u64,
+    max_turn_no: u32,
+    timestamp: String,
+    duration_ms: u64,
+}
+
+async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
+    let copilot_dir = match get_copilot_dir() {
+        Ok(dir) => dir,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let filepath = copilot_dir.join("usage").join(format!("usage-{}.jsonl", date));
+    if !filepath.exists() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "找不到指定日期的使用日誌。" }))).into_response();
+    }
+
+    let mut file = match File::open(&filepath) {
+        Ok(f) => f,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("開啟檔案失敗: {}", e) }))).into_response(),
+    };
+
+    let mut content = String::new();
+    if let Err(e) = file.read_to_string(&mut content) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("讀取檔案失敗: {}", e) }))).into_response();
+    }
+
+    let entries = parse_usage_entries(&content);
+
+    // 整理當日摘要指標
+    let mut summary = DaySummary::default();
+    let mut sessions_map: HashMap<String, Vec<UsageEntry>> = HashMap::new();
+
+    for entry in &entries {
+        if let Some(ref tokens) = entry.delta_tokens {
+            summary.total_tokens += tokens.total;
+            summary.total_input_tokens += tokens.input;
+            summary.total_output_tokens += tokens.output;
+            summary.total_reasoning_tokens += tokens.reasoning.unwrap_or(0);
+            summary.total_cache_read_tokens += tokens.cache_read.unwrap_or(0);
+        } else if let Some(ref tokens) = entry.tokens {
+            // 備用 fallback：如果 delta_tokens 不存在，且是第一個 turn，則使用 tokens 的值
+            if entry.turn_no == 1 {
+                summary.total_tokens += tokens.total;
+                summary.total_input_tokens += tokens.input;
+                summary.total_output_tokens += tokens.output;
+                summary.total_reasoning_tokens += tokens.reasoning.unwrap_or(0);
+                summary.total_cache_read_tokens += tokens.cache_read.unwrap_or(0);
+            }
+        }
+
+        if let Some(ref cost) = entry.cost {
+            summary.total_duration_ms += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
+            summary.total_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
+        }
+
+        let sid = entry.session_id.clone();
+        sessions_map.entry(sid).or_default().push(entry.clone());
+    }
+
+    summary.total_sessions = sessions_map.len();
+
+    // 整理每個 Session 的統計
+    let mut sessions_summary = Vec::new();
+    for (session_id, s_entries) in sessions_map {
+        // 以該 Session 的最大 turn_no 或最後一個 entry 作為代表
+        let last_entry = s_entries
+            .iter()
+            .max_by_key(|e| e.turn_no)
+            .cloned()
+            .unwrap_or_else(|| s_entries[0].clone());
+
+        // 計算該 Session 的累積 Token 與 Cache Token
+        let session_tokens = s_entries
+            .iter()
+            .map(|e| e.delta_tokens.as_ref().map(|t| t.total).unwrap_or(0))
+            .sum::<u64>();
+
+        let session_input_tokens = s_entries
+            .iter()
+            .map(|e| e.delta_tokens.as_ref().map(|t| t.input).unwrap_or(0))
+            .sum::<u64>();
+
+        let session_output_tokens = s_entries
+            .iter()
+            .map(|e| e.delta_tokens.as_ref().map(|t| t.output).unwrap_or(0))
+            .sum::<u64>();
+
+        let session_cache_read = s_entries
+            .iter()
+            .map(|e| e.delta_tokens.as_ref().and_then(|t| t.cache_read).unwrap_or(0))
+            .sum::<u64>();
+
+        let session_reasoning = s_entries
+            .iter()
+            .map(|e| e.delta_tokens.as_ref().and_then(|t| t.reasoning).unwrap_or(0))
+            .sum::<u64>();
+
+        let session_duration = s_entries
+            .iter()
+            .map(|e| e.cost.as_ref().map(|c| c.total_api_duration_ms.unwrap_or(0.0) as u64).unwrap_or(0))
+            .sum::<u64>();
+
+        let total_cache_read_tokens = if session_tokens > 0 {
+            session_cache_read
+        } else {
+            last_entry.tokens.as_ref().and_then(|t| t.cache_read).unwrap_or(0)
+        };
+
+        let total_reasoning_tokens = if session_tokens > 0 {
+            session_reasoning
+        } else {
+            last_entry.tokens.as_ref().and_then(|t| t.reasoning).unwrap_or(0)
+        };
+
+        sessions_summary.push(SessionSummary {
+            session_id,
+            session_name: last_entry.session_name.unwrap_or_else(|| "Start Coding Session".to_string()),
+            cwd: last_entry.cwd.unwrap_or_default(),
+            model: last_entry.model.unwrap_or_else(|| "Unknown Model".to_string()),
+            total_tokens: if session_tokens > 0 { session_tokens } else { last_entry.tokens.as_ref().map(|t| t.total).unwrap_or(0) },
+            total_input_tokens: if session_tokens > 0 { session_input_tokens } else { last_entry.tokens.as_ref().map(|t| t.input).unwrap_or(0) },
+            total_output_tokens: if session_tokens > 0 { session_output_tokens } else { last_entry.tokens.as_ref().map(|t| t.output).unwrap_or(0) },
+            total_cache_read_tokens,
+            total_reasoning_tokens,
+            max_turn_no: s_entries.iter().map(|e| e.turn_no).max().unwrap_or(1),
+            timestamp: s_entries[0].timestamp.clone(),
+            duration_ms: session_duration,
+        });
+    }
+
+    // 按時間排序 Session
+    sessions_summary.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    Json(UsageDetailsResponse {
+        date,
+        summary,
+        sessions: sessions_summary,
+        raw_entries: entries,
+    }).into_response()
+}
+
+// =========================================================================
+// API 3: 獲取 Session 對話細節並重建 Timeline 時間軸
+// =========================================================================
+
+#[derive(Serialize)]
+struct SessionTimelineResponse {
+    session_id: String,
+    metadata: HashMap<String, serde_json::Value>,
+    timeline: Vec<TimelineItem>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "event_type", content = "event_data")]
+enum TimelineItem {
+    UserPrompt {
+        timestamp: String,
+        prompt: String,
+        transformed_prompt: Option<String>,
+        attachments: Vec<serde_json::Value>,
+    },
+    AssistantReply {
+        timestamp: String,
+        reply: String,
+        model: String,
+        output_tokens: Option<u64>,
+        input_tokens: Option<u64>,
+        cache_read_tokens: Option<u64>,
+        cache_write_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+        tool_requests: Vec<serde_json::Value>,
+    },
+    ToolStep {
+        timestamp: String,
+        tool_name: String,
+        arguments: serde_json::Value,
+        result: Option<serde_json::Value>,
+    },
+    SystemStatus {
+        timestamp: String,
+        status_type: String,
+        message: String,
+    },
+}
+
+async fn get_session_details(Path(session_id): Path<String>) -> impl IntoResponse {
+    let copilot_dir = match get_copilot_dir() {
+        Ok(dir) => dir,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let filepath = copilot_dir.join("session-state").join(&session_id).join("events.jsonl");
+    if !filepath.exists() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("找不到 Session {} 的事件歷史紀錄。", session_id) }))).into_response();
+    }
+
+    let file = match File::open(&filepath) {
+        Ok(f) => f,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("開啟檔案失敗: {}", e) }))).into_response(),
+    };
+
+    let reader = BufReader::new(file);
+    let mut timeline = Vec::new();
+    let mut metadata = HashMap::new();
+
+    let mut total_in = 0;
+    let mut total_out = 0;
+    let mut total_cache = 0;
+    let mut total_reasoning = 0;
+    let mut total_all = 0;
+
+    // 用於關聯 ToolStep 的狀態對應表 (toolCallId -> TimelineItem 索引)
+    let mut tool_calls_map: HashMap<String, usize> = HashMap::new();
+
+    for line_res in reader.lines() {
+        let line = match line_res {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let event: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let timestamp = event.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        let data = event.get("data");
+
+        match event_type {
+            "session.start" => {
+                if let Some(d) = data {
+                    metadata.insert("start_time".to_string(), d.get("startTime").cloned().unwrap_or_default());
+                    metadata.insert("copilot_version".to_string(), d.get("copilotVersion").cloned().unwrap_or_default());
+                    metadata.insert("selected_model".to_string(), d.get("selectedModel").cloned().unwrap_or_default());
+                    if let Some(ctx) = d.get("context") {
+                        metadata.insert("cwd".to_string(), ctx.get("cwd").cloned().unwrap_or_default());
+                        metadata.insert("git_branch".to_string(), ctx.get("branch").cloned().unwrap_or_default());
+                        metadata.insert("repository".to_string(), ctx.get("repository").cloned().unwrap_or_default());
+                    }
+                }
+                timeline.push(TimelineItem::SystemStatus {
+                    timestamp,
+                    status_type: "session_start".to_string(),
+                    message: "會話開始 (Session Started)".to_string(),
+                });
+            }
+            "session.shutdown" => {
+                timeline.push(TimelineItem::SystemStatus {
+                    timestamp,
+                    status_type: "session_shutdown".to_string(),
+                    message: "會話結束 (Session Ended)".to_string(),
+                });
+            }
+            "user.message" => {
+                if let Some(d) = data {
+                    let prompt = d.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                    let transformed_prompt = d.get("transformedContent").and_then(|c| c.as_str()).map(|s| s.to_string());
+                    let attachments = d.get("attachments").and_then(|a| a.as_array()).cloned().unwrap_or_default();
+
+                    timeline.push(TimelineItem::UserPrompt {
+                        timestamp,
+                        prompt,
+                        transformed_prompt,
+                        attachments,
+                    });
+                }
+            }
+            "assistant.message" => {
+                if let Some(d) = data {
+                    let reply = d.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                    let model = d.get("model").and_then(|m| m.as_str()).unwrap_or("GPT").to_string();
+
+                    // 支援扁平屬性與巢狀屬性解析 Token 數據
+                    let mut output_tokens = d.get("outputTokens").and_then(|o| o.as_u64());
+                    let mut input_tokens = d.get("inputTokens").and_then(|o| o.as_u64());
+                    let mut cache_read_tokens = d.get("cacheReadTokens").and_then(|o| o.as_u64());
+                    let mut cache_write_tokens = d.get("cacheWriteTokens").and_then(|o| o.as_u64());
+                    let mut reasoning_tokens = d.get("reasoningTokens").and_then(|o| o.as_u64());
+                    let mut total_tokens = d.get("totalTokens").and_then(|o| o.as_u64());
+
+                    if let Some(tokens_obj) = d.get("tokens") {
+                        if output_tokens.is_none() {
+                            output_tokens = tokens_obj.get("output").and_then(|t| t.as_u64());
+                        }
+                        if input_tokens.is_none() {
+                            input_tokens = tokens_obj.get("input").and_then(|t| t.as_u64());
+                        }
+                        if cache_read_tokens.is_none() {
+                            cache_read_tokens = tokens_obj.get("cache_read").and_then(|t| t.as_u64());
+                        }
+                        if cache_write_tokens.is_none() {
+                            cache_write_tokens = tokens_obj.get("cache_write").and_then(|t| t.as_u64());
+                        }
+                        if reasoning_tokens.is_none() {
+                            reasoning_tokens = tokens_obj.get("reasoning").and_then(|t| t.as_u64());
+                        }
+                        if total_tokens.is_none() {
+                            total_tokens = tokens_obj.get("total").and_then(|t| t.as_u64());
+                        }
+                    }
+
+                    if total_tokens.is_none() {
+                        if let (Some(in_t), Some(out_t)) = (input_tokens, output_tokens) {
+                            total_tokens = Some(in_t + out_t);
+                        }
+                    }
+
+                    if let Some(t) = input_tokens {
+                        total_in += t;
+                    }
+                    if let Some(t) = output_tokens {
+                        total_out += t;
+                    }
+                    if let Some(t) = cache_read_tokens {
+                        total_cache += t;
+                    }
+                    if let Some(t) = reasoning_tokens {
+                        total_reasoning += t;
+                    }
+                    if let Some(t) = total_tokens {
+                        total_all += t;
+                    }
+
+                    let tool_requests = d.get("toolRequests").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+
+                    // 即使助理回覆是空白（例如僅呼叫 Tool），也記錄下來方便觀測
+                    timeline.push(TimelineItem::AssistantReply {
+                        timestamp,
+                        reply,
+                        model,
+                        output_tokens,
+                        input_tokens,
+                        cache_read_tokens,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        total_tokens,
+                        tool_requests,
+                    });
+                }
+            }
+            "tool.execution_start" => {
+                if let Some(d) = data {
+                    let tool_name = d.get("toolName").and_then(|t| t.as_str()).unwrap_or("unknown").to_string();
+                    let arguments = d.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+                    let tool_call_id = d.get("toolCallId").and_then(|id| id.as_str()).unwrap_or("").to_string();
+
+                    let index = timeline.len();
+                    timeline.push(TimelineItem::ToolStep {
+                        timestamp,
+                        tool_name,
+                        arguments,
+                        result: None,
+                    });
+
+                    if !tool_call_id.is_empty() {
+                        tool_calls_map.insert(tool_call_id, index);
+                    }
+                }
+            }
+            "tool.execution_complete" => {
+                if let Some(d) = data {
+                    let tool_call_id = d.get("toolCallId").and_then(|id| id.as_str()).unwrap_or("").to_string();
+                    let result = d.get("result").cloned().unwrap_or(serde_json::Value::Null);
+
+                    if let Some(&idx) = tool_calls_map.get(&tool_call_id) {
+                        if idx < timeline.len() {
+                            // 更新先前加入的 ToolStep 結果
+                            if let TimelineItem::ToolStep { result: ref mut res, .. } = &mut timeline[idx] {
+                                *res = Some(result);
+                            } else {
+                                // 以防型別不對，直接替換
+                                if let TimelineItem::ToolStep { timestamp, tool_name, arguments, .. } = &timeline[idx] {
+                                    timeline[idx] = TimelineItem::ToolStep {
+                                        timestamp: timestamp.clone(),
+                                        tool_name: tool_name.clone(),
+                                        arguments: arguments.clone(),
+                                        result: Some(result),
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    metadata.insert("total_input_tokens".to_string(), serde_json::Value::from(total_in));
+    metadata.insert("total_output_tokens".to_string(), serde_json::Value::from(total_out));
+    metadata.insert("total_cache_read_tokens".to_string(), serde_json::Value::from(total_cache));
+    metadata.insert("total_reasoning_tokens".to_string(), serde_json::Value::from(total_reasoning));
+    metadata.insert("total_tokens".to_string(), serde_json::Value::from(total_all));
+
+    Json(SessionTimelineResponse {
+        session_id,
+        metadata,
+        timeline,
+    }).into_response()
+}
+
+// =========================================================================
+// API 4: 列出所有可用的月份清單
+// =========================================================================
+
+#[derive(Serialize)]
+struct MonthListResponse {
+    months: Vec<String>,
+}
+
+async fn get_available_months() -> impl IntoResponse {
+    let copilot_dir = match get_copilot_dir() {
+        Ok(dir) => dir,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let usage_dir = copilot_dir.join("usage");
+    if !usage_dir.exists() {
+        return Json(MonthListResponse { months: vec![] }).into_response();
+    }
+
+    let mut months = std::collections::HashSet::new();
+    if let Ok(entries) = std::fs::read_dir(usage_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    let filename = entry.file_name().to_string_lossy().into_owned();
+                    if filename.starts_with("usage-") && filename.ends_with(".jsonl") {
+                        let date_str = filename
+                            .trim_start_matches("usage-")
+                            .trim_end_matches(".jsonl");
+                        if date_str.len() >= 7 {
+                            months.insert(date_str[0..7].to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut month_list: Vec<String> = months.into_iter().collect();
+    month_list.sort_by(|a, b| b.cmp(a));
+
+    Json(MonthListResponse { months: month_list }).into_response()
+}
+
+// =========================================================================
+// API 5: 獲取特定月份的彙整統計
+// =========================================================================
+
+#[derive(Serialize)]
+struct MonthlyDetailsResponse {
+    year_month: String,
+    summary: DaySummary,
+    daily_breakdown: Vec<DailyBreakdownEntry>,
+    top_models: Vec<ModelUsageSummary>,
+    top_projects: Vec<ProjectUsageSummary>,
+}
+
+#[derive(Serialize, Clone)]
+struct DailyBreakdownEntry {
+    date: String,
+    total_sessions: usize,
+    total_tokens: u64,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_cache_read_tokens: u64,
+    total_duration_ms: u64,
+    total_requests: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct ModelUsageSummary {
+    model: String,
+    session_count: usize,
+    total_tokens: u64,
+    total_cache_read_tokens: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct ProjectUsageSummary {
+    project: String,
+    session_count: usize,
+    total_tokens: u64,
+    total_cache_read_tokens: u64,
+}
+
+async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoResponse {
+    let copilot_dir = match get_copilot_dir() {
+        Ok(dir) => dir,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let usage_dir = copilot_dir.join("usage");
+    if !usage_dir.exists() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "找不到使用量資料夾。" }))).into_response();
+    }
+
+    let mut daily_breakdown = Vec::new();
+    let mut monthly_summary = DaySummary::default();
+    
+    let mut model_sessions: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    let mut model_tokens: HashMap<String, u64> = HashMap::new();
+    let mut model_cache_tokens: HashMap<String, u64> = HashMap::new();
+    
+    let mut project_sessions: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    let mut project_tokens: HashMap<String, u64> = HashMap::new();
+    let mut project_cache_tokens: HashMap<String, u64> = HashMap::new();
+
+    let prefix = format!("usage-{}-", year_month);
+    
+    if let Ok(entries) = std::fs::read_dir(usage_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    let filename = entry.file_name().to_string_lossy().into_owned();
+                    if filename.starts_with(&prefix) && filename.ends_with(".jsonl") {
+                        let date_str = filename
+                            .trim_start_matches("usage-")
+                            .trim_end_matches(".jsonl")
+                            .to_string();
+                        
+                        let filepath = entry.path();
+                        if let Ok(mut file) = File::open(&filepath) {
+                            let mut content = String::new();
+                            if file.read_to_string(&mut content).is_ok() {
+                                let entries_list = parse_usage_entries(&content);
+
+                                if !entries_list.is_empty() {
+                                    let mut day_tokens = 0;
+                                    let mut day_input = 0;
+                                    let mut day_output = 0;
+                                    let mut day_reasoning = 0;
+                                    let mut day_cache_read = 0;
+                                    let mut day_duration = 0;
+                                    let mut day_requests = 0;
+                                    let mut day_sessions = std::collections::HashSet::new();
+
+                                    for e in &entries_list {
+                                        let sid = e.session_id.clone();
+                                        day_sessions.insert(sid.clone());
+
+                                        let mut entry_tokens = 0;
+                                        if let Some(ref tokens) = e.delta_tokens {
+                                            entry_tokens = tokens.total;
+                                            day_tokens += tokens.total;
+                                            day_input += tokens.input;
+                                            day_output += tokens.output;
+                                            day_reasoning += tokens.reasoning.unwrap_or(0);
+                                            day_cache_read += tokens.cache_read.unwrap_or(0);
+                                        } else if let Some(ref tokens) = e.tokens {
+                                            if e.turn_no == 1 {
+                                                entry_tokens = tokens.total;
+                                                day_tokens += tokens.total;
+                                                day_input += tokens.input;
+                                                day_output += tokens.output;
+                                                day_reasoning += tokens.reasoning.unwrap_or(0);
+                                                day_cache_read += tokens.cache_read.unwrap_or(0);
+                                            }
+                                        }
+
+                                        if let Some(ref cost) = e.cost {
+                                            day_duration += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
+                                            day_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
+                                        }
+
+                                        let mut entry_cache = 0;
+                                        if let Some(ref tokens) = e.delta_tokens {
+                                            entry_cache = tokens.cache_read.unwrap_or(0);
+                                        } else if let Some(ref tokens) = e.tokens {
+                                            if e.turn_no == 1 {
+                                                entry_cache = tokens.cache_read.unwrap_or(0);
+                                            }
+                                        }
+
+                                        let model = e.model.clone().unwrap_or_else(|| "Unknown Model".to_string());
+                                        model_sessions.entry(model.clone()).or_default().insert(sid.clone());
+                                        *model_tokens.entry(model.clone()).or_default() += entry_tokens;
+                                        *model_cache_tokens.entry(model).or_default() += entry_cache;
+
+                                        let cwd = e.cwd.clone().unwrap_or_else(|| "Unknown Path".to_string());
+                                        project_sessions.entry(cwd.clone()).or_default().insert(sid.clone());
+                                        *project_tokens.entry(cwd.clone()).or_default() += entry_tokens;
+                                        *project_cache_tokens.entry(cwd).or_default() += entry_cache;
+                                    }
+
+                                    monthly_summary.total_tokens += day_tokens;
+                                    monthly_summary.total_input_tokens += day_input;
+                                    monthly_summary.total_output_tokens += day_output;
+                                    monthly_summary.total_reasoning_tokens += day_reasoning;
+                                    monthly_summary.total_cache_read_tokens += day_cache_read;
+                                    monthly_summary.total_duration_ms += day_duration;
+                                    monthly_summary.total_requests += day_requests;
+
+                                    daily_breakdown.push(DailyBreakdownEntry {
+                                        date: date_str,
+                                        total_sessions: day_sessions.len(),
+                                        total_tokens: day_tokens,
+                                        total_input_tokens: day_input,
+                                        total_output_tokens: day_output,
+                                        total_cache_read_tokens: day_cache_read,
+                                        total_duration_ms: day_duration,
+                                        total_requests: day_requests,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    daily_breakdown.sort_by(|a, b| a.date.cmp(&b.date));
+
+    let mut all_month_sessions = std::collections::HashSet::new();
+    for (_, sids) in &model_sessions {
+        for sid in sids {
+            all_month_sessions.insert(sid.clone());
+        }
+    }
+    monthly_summary.total_sessions = all_month_sessions.len();
+
+    let mut top_models = Vec::new();
+    for (model, sids) in model_sessions {
+        let total_tokens = model_tokens.get(&model).cloned().unwrap_or(0);
+        let total_cache_read_tokens = model_cache_tokens.get(&model).cloned().unwrap_or(0);
+        top_models.push(ModelUsageSummary {
+            model,
+            session_count: sids.len(),
+            total_tokens,
+            total_cache_read_tokens,
+        });
+    }
+    top_models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+
+    let mut top_projects = Vec::new();
+    for (project, sids) in project_sessions {
+        let total_tokens = project_tokens.get(&project).cloned().unwrap_or(0);
+        let total_cache_read_tokens = project_cache_tokens.get(&project).cloned().unwrap_or(0);
+        top_projects.push(ProjectUsageSummary {
+            project,
+            session_count: sids.len(),
+            total_tokens,
+            total_cache_read_tokens,
+        });
+    }
+    top_projects.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+
+    Json(MonthlyDetailsResponse {
+        year_month,
+        summary: monthly_summary,
+        daily_breakdown,
+        top_models,
+        top_projects,
+    }).into_response()
+}

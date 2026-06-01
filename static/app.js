@@ -1200,6 +1200,7 @@ async function openSessionTimeline(sessionId, sessionName, totalTokens, cacheRea
   currentSessionCacheTokens = cacheReadTokens || 0;
   currentSessionInputTokens = inputTokens || 0;
   currentSessionOutputTokens = outputTokens || 0;
+  currentSessionReasoningTokens = reasoningTokens || 0;
   currentSessionCwd = cwd || '';
   currentSessionModel = model || '';
 
@@ -1215,6 +1216,7 @@ async function openSessionTimeline(sessionId, sessionName, totalTokens, cacheRea
   document.getElementById('meta-cache').textContent = formatToken(cacheReadTokens || 0);
   document.getElementById('meta-input').textContent = formatToken(inputTokens || 0);
   document.getElementById('meta-output').textContent = formatToken(outputTokens || 0);
+  document.getElementById('meta-reasoning').textContent = formatToken(reasoningTokens || 0);
 
   // 顯示加載動畫
   timelineContainer.innerHTML = `<div class="placeholder-text">${t('drawer_loading')}</div>`;

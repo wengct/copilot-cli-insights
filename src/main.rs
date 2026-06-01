@@ -565,9 +565,14 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
     };
 
-    let filepath = copilot_dir.join("session-state").join(&session_id).join("events.jsonl");
+    let mut filepath = copilot_dir.join("session-state").join(&session_id).join("events.jsonl");
     if !filepath.exists() {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("找不到 Session {} 的事件歷史紀錄。", session_id) }))).into_response();
+        let fallback = copilot_dir.join("session-state").join(format!("{}.jsonl", session_id));
+        if fallback.exists() {
+            filepath = fallback;
+        } else {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("找不到 Session {} 的事件歷史紀錄。", session_id) }))).into_response();
+        }
     }
 
     let file = match File::open(&filepath) {

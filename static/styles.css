@@ -1037,7 +1037,7 @@ body {
 }
 
 .prompt-text.expanded {
-  max-height: 2000px;
+  max-height: none;
   opacity: 1;
   overflow: visible;
 }
@@ -1109,7 +1109,7 @@ body {
 }
 
 .reply-content.expanded {
-  max-height: 5000px;
+  max-height: none;
   opacity: 1;
   overflow: visible;
 }

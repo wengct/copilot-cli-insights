@@ -933,6 +933,11 @@ body {
   margin-bottom: 8px;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
 .bubble-header .sender {
   font-family: var(--font-display);
   font-size: 12px;
@@ -1191,6 +1196,8 @@ body {
   gap: 6px;
   flex-wrap: wrap;
   align-items: center;
+  margin-top: 4px;
+  margin-bottom: 8px;
 }
 
 .turn-token-stats .token-badge {

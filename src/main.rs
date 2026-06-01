@@ -637,6 +637,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
     
     // 用於記錄目前對話的回合序號，以確保與 SQLite 中的 turn_no 完美精確對齊
     let mut current_turn_no = 1;
+    let mut has_seen_user_prompt = false;
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -679,6 +680,10 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                 });
             }
             "user.message" => {
+                if has_seen_user_prompt {
+                    current_turn_no += 1;
+                }
+                has_seen_user_prompt = true;
                 if let Some(d) = data {
                     let prompt = d.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
                     let transformed_prompt = d.get("transformedContent").and_then(|c| c.as_str()).map(|s| s.to_string());
@@ -784,8 +789,8 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                         tool_requests,
                     });
 
-                    // 如果此助理訊息沒有調用任何 Tool，代表是本回合的最終回覆，將回合序號遞增 1
-                    if !has_tools {
+                    // 如果此助理訊息沒有調用任何 Tool，且此會話從未出現過使用者提問（即 CLI 帶參數模式），則將回合序號遞增 1
+                    if !has_tools && !has_seen_user_prompt {
                         current_turn_no += 1;
                     }
                 }

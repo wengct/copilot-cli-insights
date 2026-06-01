@@ -1294,7 +1294,9 @@ function renderTimeline(data) {
   }
 
   // 渲染時間軸物件，使用單一回合序號進行對齊
+  const hasUserPrompts = timeline.some(item => item.event_type === 'UserPrompt');
   let currentTurnNo = 1;
+  let isFirstPrompt = true;
 
   timeline.forEach(item => {
     const timeStr = item.event_data.timestamp ? formatLocalTime(item.event_data.timestamp, true) : '';
@@ -1303,6 +1305,10 @@ function renderTimeline(data) {
 
     switch (item.event_type) {
       case 'UserPrompt': {
+        if (!isFirstPrompt) {
+          currentTurnNo++;
+        }
+        isFirstPrompt = false;
         const prompt = item.event_data.prompt;
         
         let attachmentsHTML = '';
@@ -1325,8 +1331,10 @@ function renderTimeline(data) {
           <div class="timeline-dot"></div>
           <div class="user-bubble">
             <div class="bubble-header">
-              <span class="turn-no-badge">#${currentTurnNo}</span>
-              <span class="sender">${t('sender_user')}</span>
+              <div class="header-left">
+                <span class="turn-no-badge">#${currentTurnNo}</span>
+                <span class="sender">${t('sender_user')}</span>
+              </div>
               <span class="time">${timeStr}</span>
             </div>
             <div class="prompt-content-wrapper">
@@ -1412,14 +1420,16 @@ function renderTimeline(data) {
           <div class="timeline-dot"></div>
           <div class="assistant-bubble">
             <div class="bubble-header">
-              <span class="turn-no-badge">#${currentTurnNo}</span>
-              <span class="sender">${t('sender_agent')} (${escapeHtml(model)})</span>
+              <div class="header-left">
+                <span class="turn-no-badge">#${currentTurnNo}</span>
+                <span class="sender">${t('sender_agent')} (${escapeHtml(model)})</span>
+              </div>
               <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-                ${tokenBadge}
                 ${copyButtonHtml}
                 <span class="time">${timeStr}</span>
               </div>
             </div>
+            ${tokenBadge}
             <div class="reply-content-wrapper">
               <div class="reply-content collapsed">${replyHtml}</div>
               <button class="reply-toggle-btn">
@@ -1451,8 +1461,8 @@ function renderTimeline(data) {
           });
         }
 
-        // 如果此助理訊息沒有調用任何 Tool，代表是本回合的最終回覆，將回合序號遞增 1
-        if (!hasTools) {
+        // 如果此助理訊息沒有調用任何 Tool，且此會話沒有使用者提問事件，則將回合序號遞增 1
+        if (!hasTools && !hasUserPrompts) {
           currentTurnNo++;
         }
 

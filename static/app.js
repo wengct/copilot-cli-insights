@@ -1294,7 +1294,7 @@ function renderTimeline(data) {
   }
 
   // 渲染時間軸物件，使用單一回合序號進行對齊
-  let currentTurnNo = 0;
+  let currentTurnNo = 1;
 
   timeline.forEach(item => {
     const timeStr = item.event_data.timestamp ? formatLocalTime(item.event_data.timestamp, true) : '';
@@ -1303,7 +1303,6 @@ function renderTimeline(data) {
 
     switch (item.event_type) {
       case 'UserPrompt': {
-        currentTurnNo++;
         const prompt = item.event_data.prompt;
         
         let attachmentsHTML = '';
@@ -1326,13 +1325,42 @@ function renderTimeline(data) {
           <div class="timeline-dot"></div>
           <div class="user-bubble">
             <div class="bubble-header">
-              <span class="sender">${t('sender_user')} <span class="turn-no-badge">#${currentTurnNo}</span></span>
+              <span class="turn-no-badge">#${currentTurnNo}</span>
+              <span class="sender">${t('sender_user')}</span>
               <span class="time">${timeStr}</span>
             </div>
-            <div class="prompt-text">${escapeHtml(prompt)}</div>
+            <div class="prompt-content-wrapper">
+              <div class="prompt-text collapsed">${escapeHtml(prompt)}</div>
+              <button class="prompt-toggle-btn">
+                <span class="btn-text">${t('expand_reply')}</span> <span class="arrow">▼</span>
+              </button>
+            </div>
             ${attachmentsHTML}
           </div>
         `;
+
+        // 綁定提問摺疊按鈕事件
+        const promptText = div.querySelector('.prompt-text');
+        const promptToggleBtn = div.querySelector('.prompt-toggle-btn');
+        if (promptText && promptToggleBtn) {
+          promptToggleBtn.addEventListener('click', () => {
+            const isCollapsed = promptText.classList.contains('collapsed');
+            if (isCollapsed) {
+              promptText.classList.remove('collapsed');
+              promptText.classList.add('expanded');
+              promptToggleBtn.classList.add('expanded');
+              promptToggleBtn.querySelector('.btn-text').textContent = t('collapse_reply');
+              promptToggleBtn.querySelector('.arrow').textContent = '▲';
+            } else {
+              promptText.classList.remove('expanded');
+              promptText.classList.add('collapsed');
+              promptToggleBtn.classList.remove('expanded');
+              promptToggleBtn.querySelector('.btn-text').textContent = t('expand_reply');
+              promptToggleBtn.querySelector('.arrow').textContent = '▼';
+            }
+          });
+        }
+
         break;
       }
 
@@ -1348,7 +1376,10 @@ function renderTimeline(data) {
 
         // 如果 content 為空但有 Tool 呼叫，代表助理正在使用工具
         let replyHtml = '';
-        if (!replyMarkdown && item.event_data.tool_requests && item.event_data.tool_requests.length > 0) {
+        const toolRequests = item.event_data.tool_requests || [];
+        const hasTools = toolRequests.length > 0;
+
+        if (!replyMarkdown && hasTools) {
           replyHtml = `<span style="font-style: italic; color: var(--text-muted);">${t('thinking_tools')}</span>`;
         } else {
           replyHtml = marked.parse(replyMarkdown || '');
@@ -1381,7 +1412,8 @@ function renderTimeline(data) {
           <div class="timeline-dot"></div>
           <div class="assistant-bubble">
             <div class="bubble-header">
-              <span class="sender">${t('sender_agent')} (${escapeHtml(model)}) <span class="turn-no-badge">#${currentTurnNo > 0 ? currentTurnNo : 1}</span></span>
+              <span class="turn-no-badge">#${currentTurnNo}</span>
+              <span class="sender">${t('sender_agent')} (${escapeHtml(model)})</span>
               <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 ${tokenBadge}
                 ${copyButtonHtml}
@@ -1417,6 +1449,11 @@ function renderTimeline(data) {
               toggleBtn.querySelector('.arrow').textContent = '▼';
             }
           });
+        }
+
+        // 如果此助理訊息沒有調用任何 Tool，代表是本回合的最終回覆，將回合序號遞增 1
+        if (!hasTools) {
+          currentTurnNo++;
         }
 
         // 綁定複製 Markdown 事件

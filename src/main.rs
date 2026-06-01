@@ -585,6 +585,43 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("開啟檔案失敗: {}", e) }))).into_response(),
     };
 
+    // 預先從 SQLite 資料庫中載入此 Session 的每回合 (turn_no) 的 Token 增量 (delta_tokens) 統計
+    let session_id_clone = session_id.clone();
+    let db_entries: HashMap<u32, TokenStats> = tokio::task::spawn_blocking(move || {
+        let mut map = HashMap::new();
+        if let Ok(conn) = db::get_db_conn() {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT turn_no, delta_input, delta_output, delta_cache_read, delta_reasoning, delta_total 
+                 FROM usage_entries WHERE session_id = ? ORDER BY turn_no ASC"
+            ) {
+                if let Ok(mut rows) = stmt.query(params![session_id_clone]) {
+                    while let Ok(Some(row)) = rows.next() {
+                        if let (Ok(turn_no), Ok(delta_input), Ok(delta_output), Ok(delta_total)) = (
+                            row.get::<_, i64>(0),
+                            row.get::<_, Option<i64>>(1),
+                            row.get::<_, Option<i64>>(2),
+                            row.get::<_, Option<i64>>(5)
+                        ) {
+                            if let (Some(input), Some(output), Some(total)) = (delta_input, delta_output, delta_total) {
+                                let cache_read = row.get::<_, Option<i64>>(3).ok().flatten().map(|v| v as u64);
+                                let reasoning = row.get::<_, Option<i64>>(4).ok().flatten().map(|v| v as u64);
+                                map.insert(turn_no as u32, TokenStats {
+                                    input: input as u64,
+                                    output: output as u64,
+                                    cache_read,
+                                    cache_write: None,
+                                    reasoning,
+                                    total: total as u64,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
+    }).await.unwrap_or_default();
+
     let reader = BufReader::new(file);
     let mut timeline = Vec::new();
     let mut metadata = HashMap::new();
@@ -597,6 +634,9 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
 
     // 用於關聯 ToolStep 的狀態對應表 (toolCallId -> TimelineItem 索引)
     let mut tool_calls_map: HashMap<String, usize> = HashMap::new();
+    
+    // 用於計算當前 assistant 氣泡的回合序號，以便與 SQLite 中的 turn_no 進行關聯
+    let mut assistant_turn_count = 0;
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -653,6 +693,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                 }
             }
             "assistant.message" => {
+                assistant_turn_count += 1;
                 if let Some(d) = data {
                     let reply = d.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
                     let model = d.get("model").and_then(|m| m.as_str()).unwrap_or("GPT").to_string();
@@ -683,6 +724,25 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                         }
                         if total_tokens.is_none() {
                             total_tokens = tokens_obj.get("total").and_then(|t| t.as_u64());
+                        }
+                    }
+
+                    // 如果從 events.jsonl 本身解析出的 Token 數據不齊全，則嘗試從 SQLite 資料庫中對應 turn_no 的 delta_tokens 數據補齊
+                    if let Some(db_stats) = db_entries.get(&assistant_turn_count) {
+                        if input_tokens.is_none() || input_tokens == Some(0) {
+                            input_tokens = Some(db_stats.input);
+                        }
+                        if output_tokens.is_none() || output_tokens == Some(0) {
+                            output_tokens = Some(db_stats.output);
+                        }
+                        if cache_read_tokens.is_none() || cache_read_tokens == Some(0) {
+                            cache_read_tokens = db_stats.cache_read;
+                        }
+                        if reasoning_tokens.is_none() || reasoning_tokens == Some(0) {
+                            reasoning_tokens = db_stats.reasoning;
+                        }
+                        if total_tokens.is_none() || total_tokens == Some(0) {
+                            total_tokens = Some(db_stats.total);
                         }
                     }
 

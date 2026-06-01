@@ -877,7 +877,7 @@ body {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
   padding-left: 20px;
   margin-left: 10px;
   border-left: 2px dashed rgba(255, 255, 255, 0.1);
@@ -918,7 +918,7 @@ body {
   background: rgba(0, 242, 254, 0.06);
   border: 1px solid rgba(0, 242, 254, 0.15);
   border-radius: 16px 16px 4px 16px;
-  padding: 16px 20px;
+  padding: 12px 16px;
 }
 
 .user-bubble .timeline-dot {
@@ -953,7 +953,7 @@ body {
 }
 
 .prompt-text {
-  font-size: 13.5px;
+  font-size: 15px;
   line-height: 1.6;
   white-space: pre-wrap;
   font-weight: 500;
@@ -990,7 +990,7 @@ body {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--glass-border);
   border-radius: 16px 16px 16px 4px;
-  padding: 20px;
+  padding: 14px 18px;
 }
 
 .assistant-bubble .timeline-dot {
@@ -1092,7 +1092,7 @@ body {
 
 /* AI Reply Markdown styles */
 .reply-content {
-  font-size: 13.5px;
+  font-size: 15px;
   line-height: 1.6;
   color: var(--text-primary);
   word-break: break-word;
@@ -1169,10 +1169,10 @@ body {
 
 .reply-content th,
 .reply-content td {
-  padding: 10px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--glass-border);
   text-align: left;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .reply-content th {
@@ -1255,7 +1255,7 @@ body {
   background: rgba(255, 255, 255, 0.08);
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 13px;
   color: #ff79c6;
 }
 
@@ -1263,7 +1263,7 @@ body {
   background: var(--bg-code);
   border: 1px solid var(--glass-border);
   border-radius: 8px;
-  padding: 16px;
+  padding: 12px 14px;
   overflow-x: auto;
   margin-bottom: 14px;
   margin-top: 6px;
@@ -1273,7 +1273,7 @@ body {
   background: transparent;
   color: var(--text-primary);
   padding: 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .reply-content ul, .reply-content ol {
@@ -1292,7 +1292,7 @@ body {
 }
 
 .reply-content h2 {
-  font-size: 16px;
+  font-size: 18px;
 }
 
 /* Tool execution timeline step */
@@ -1300,7 +1300,7 @@ body {
   background: rgba(255, 255, 255, 0.015);
   border: 1px solid var(--glass-border);
   border-radius: 10px;
-  padding: 10px 16px;
+  padding: 8px 14px;
 }
 
 .tool-step-bubble .timeline-dot {

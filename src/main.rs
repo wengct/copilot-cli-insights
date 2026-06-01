@@ -787,6 +787,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
     let mut total_cache = 0;
     let mut total_reasoning = 0;
     let mut total_all = 0;
+    let mut compaction_count = 0;
 
     // 用於關聯 ToolStep 的狀態對應表 (toolCallId -> TimelineItem 索引)
     let mut tool_calls_map: HashMap<String, usize> = HashMap::new();
@@ -829,6 +830,14 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
         };
 
         match event_type {
+            "session.compaction_complete" => {
+                compaction_count += 1;
+                timeline.push(TimelineItem::SystemStatus {
+                    timestamp,
+                    status_type: "session_compaction".to_string(),
+                    message: "會話狀態壓縮完成 (Session Compaction Completed)".to_string(),
+                });
+            }
             "session.start" => {
                 if let Some(d) = data {
                     metadata.insert("start_time".to_string(), d.get("startTime").cloned().unwrap_or_default());
@@ -1027,6 +1036,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
     metadata.insert("total_cache_read_tokens".to_string(), serde_json::Value::from(total_cache));
     metadata.insert("total_reasoning_tokens".to_string(), serde_json::Value::from(total_reasoning));
     metadata.insert("total_tokens".to_string(), serde_json::Value::from(total_all));
+    metadata.insert("compaction_count".to_string(), serde_json::Value::from(compaction_count));
 
     Json(SessionTimelineResponse {
         session_id,

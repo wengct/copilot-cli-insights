@@ -126,6 +126,7 @@ const i18n = {
     drawer_output: '輸出',
     drawer_reasoning: '推理',
     drawer_cache: '快取',
+    drawer_compaction: '壓縮次數',
     drawer_total: '總計',
     drawer_loading: '對話時間軸還原中...',
     drawer_load_failed_cleaned: '無法載入此 Session 事件，可能對應的 events.jsonl 檔案已被系統清理。',
@@ -144,6 +145,7 @@ const i18n = {
     tool_result: '執行輸出 (Result)',
     session_started: '會話開始 (Session Started)',
     session_ended: '會話結束 (Session Ended)',
+    session_compaction: '會話狀態壓縮完成 (Session Compaction Completed)',
     reload_success: '數據已成功重新整理',
     reload_failed: '重新整理失敗',
     monthly_reload_success: '月度數據已成功重新整理',
@@ -280,6 +282,7 @@ const i18n = {
     drawer_output: 'Output',
     drawer_reasoning: 'Reasoning',
     drawer_cache: 'Cache',
+    drawer_compaction: 'Compactions',
     drawer_total: 'Total',
     drawer_loading: 'Reconstructing session timeline...',
     drawer_load_failed_cleaned: 'Failed to load session events. The events.jsonl file might have been cleaned up by the system.',
@@ -298,6 +301,7 @@ const i18n = {
     tool_result: 'Result',
     session_started: 'Session Started',
     session_ended: 'Session Ended',
+    session_compaction: 'Session Compaction Completed',
     reload_success: 'Data refreshed successfully',
     reload_failed: 'Failed to refresh data',
     monthly_reload_success: 'Monthly data refreshed successfully',
@@ -1246,6 +1250,7 @@ async function openSessionTimeline(sessionId, sessionName, totalTokens, cacheRea
   document.getElementById('meta-model').textContent = model || '-';
   document.getElementById('meta-tokens').textContent = formatToken(totalTokens || 0);
   document.getElementById('meta-cache').textContent = formatToken(cacheReadTokens || 0);
+  document.getElementById('meta-compaction').textContent = '-';
   document.getElementById('meta-input').textContent = formatToken(inputTokens || 0);
   document.getElementById('meta-output').textContent = formatToken(outputTokens || 0);
   document.getElementById('meta-reasoning').textContent = formatToken(reasoningTokens || 0);
@@ -1306,6 +1311,7 @@ function renderTimeline(data) {
 
   document.getElementById('meta-tokens').textContent = formatToken(finalTotal);
   document.getElementById('meta-cache').textContent = formatToken(finalCache);
+  document.getElementById('meta-compaction').textContent = metadata.compaction_count || 0;
   document.getElementById('meta-input').textContent = formatToken(finalInput);
   document.getElementById('meta-output').textContent = formatToken(finalOutput);
   document.getElementById('meta-reasoning').textContent = formatToken(finalReasoning);
@@ -1583,12 +1589,20 @@ function renderTimeline(data) {
           message = t('session_started');
         } else if (message === '會話結束 (Session Ended)') {
           message = t('session_ended');
+        } else if (message === '會話狀態壓縮完成 (Session Compaction Completed)') {
+          message = t('session_compaction');
         }
+
+        let emoji = '⚙️';
+        if (item.event_data.status_type === 'session_compaction') {
+          emoji = '🗜️';
+        }
+
         div.innerHTML = `
           <div class="timeline-dot"></div>
           <div class="system-bubble">
             <div class="system-badge">
-              ⚙️ ${escapeHtml(message)} <span class="time">${timeStr}</span>
+              ${emoji} ${escapeHtml(message)} <span class="time">${timeStr}</span>
             </div>
           </div>
         `;

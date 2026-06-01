@@ -13,8 +13,8 @@
   --glass-border-focus: rgba(0, 242, 254, 0.3);
   
   --text-primary: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
 
   /* Accent Gradients & Colors */
   --accent-cyan: #00f2fe;
@@ -781,7 +781,7 @@ body {
 }
 
 .session-stats-grid {
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   margin-top: 12px;
 }
 
@@ -825,7 +825,7 @@ body {
     grid-column: span 2;
   }
   .session-stats-grid .meta-item.stat-item.highlight {
-    grid-column: span 2;
+    grid-column: span 1;
   }
 }
 
@@ -842,13 +842,13 @@ body {
     grid-column: span 1;
   }
   .session-stats-grid .meta-item.stat-item.highlight {
-    grid-column: span 2;
+    grid-column: span 1;
   }
 }
 
 .meta-item .lbl {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -892,6 +892,10 @@ body {
 
 #meta-cache {
   color: #34d399;
+}
+
+#meta-compaction {
+  color: #f97316;
 }
 
 #meta-input {

@@ -1310,6 +1310,7 @@ function renderTimeline(data) {
         }
         isFirstPrompt = false;
         const prompt = item.event_data.prompt;
+        const turnNo = item.event_data.turn_no || currentTurnNo;
         
         let attachmentsHTML = '';
         if (item.event_data.attachments && item.event_data.attachments.length > 0) {
@@ -1332,7 +1333,7 @@ function renderTimeline(data) {
           <div class="user-bubble">
             <div class="bubble-header">
               <div class="header-left">
-                <span class="turn-no-badge">#${currentTurnNo}</span>
+                <span class="turn-no-badge">#${turnNo}</span>
                 <span class="sender">${t('sender_user')}</span>
               </div>
               <span class="time">${timeStr}</span>
@@ -1381,6 +1382,7 @@ function renderTimeline(data) {
         const cacheWriteTokens = item.event_data.cache_write_tokens;
         const reasoningTokens = item.event_data.reasoning_tokens;
         const totalTokens = item.event_data.total_tokens || ((inTokens || outTokens) ? ((inTokens || 0) + (outTokens || 0)) : null);
+        const turnNo = item.event_data.turn_no || currentTurnNo;
 
         // 如果 content 為空但有 Tool 呼叫，代表助理正在使用工具
         let replyHtml = '';
@@ -1421,7 +1423,7 @@ function renderTimeline(data) {
           <div class="assistant-bubble">
             <div class="bubble-header">
               <div class="header-left">
-                <span class="turn-no-badge">#${currentTurnNo}</span>
+                <span class="turn-no-badge">#${turnNo}</span>
                 <span class="sender">${t('sender_agent')} (${escapeHtml(model)})</span>
               </div>
               <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">

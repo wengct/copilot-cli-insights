@@ -538,6 +538,7 @@ enum TimelineItem {
         prompt: String,
         transformed_prompt: Option<String>,
         attachments: Vec<serde_json::Value>,
+        turn_no: u32,
     },
     AssistantReply {
         timestamp: String,
@@ -550,12 +551,14 @@ enum TimelineItem {
         reasoning_tokens: Option<u64>,
         total_tokens: Option<u64>,
         tool_requests: Vec<serde_json::Value>,
+        turn_no: u32,
     },
     ToolStep {
         timestamp: String,
         tool_name: String,
         arguments: serde_json::Value,
         result: Option<serde_json::Value>,
+        turn_no: u32,
     },
     SystemStatus {
         timestamp: String,
@@ -638,6 +641,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
     // 用於記錄目前對話的回合序號，以確保與 SQLite 中的 turn_no 完美精確對齊
     let mut current_turn_no = 1;
     let mut has_seen_user_prompt = false;
+    let mut turn_ids: Vec<String> = Vec::new();
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -653,6 +657,23 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
         let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let timestamp = event.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
         let data = event.get("data");
+
+        // 精準解析 events.jsonl 中的 turnId (優先從 data 區塊，其次從根節點)
+        let turn_id = event.get("turnId")
+            .or_else(|| data.and_then(|d| d.get("turnId")))
+            .and_then(|id| id.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // 依據 turnId 進行精準對齊，若 turnId 不存在則 Fallback 採用回合計數對齊器
+        let turn_no = if !turn_id.is_empty() {
+            if !turn_ids.contains(&turn_id) {
+                turn_ids.push(turn_id.clone());
+            }
+            (turn_ids.iter().position(|id| id == &turn_id).unwrap() + 1) as u32
+        } else {
+            current_turn_no as u32
+        };
 
         match event_type {
             "session.start" => {
@@ -694,6 +715,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                         prompt,
                         transformed_prompt,
                         attachments,
+                        turn_no,
                     });
                 }
             }
@@ -732,7 +754,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                     }
 
                     // 如果從 events.jsonl 本身解析出的 Token 數據不齊全，則嘗試從 SQLite 資料庫中對應 turn_no 的 delta_tokens 數據補齊
-                    if let Some(db_stats) = db_entries.get(&current_turn_no) {
+                    if let Some(db_stats) = db_entries.get(&turn_no) {
                         if input_tokens.is_none() || input_tokens == Some(0) {
                             input_tokens = Some(db_stats.input);
                         }
@@ -787,6 +809,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                         reasoning_tokens,
                         total_tokens,
                         tool_requests,
+                        turn_no,
                     });
 
                     // 如果此助理訊息沒有調用任何 Tool，且此會話從未出現過使用者提問（即 CLI 帶參數模式），則將回合序號遞增 1
@@ -808,6 +831,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                         tool_name,
                         arguments,
                         result: None,
+                        turn_no,
                     });
 
                     if !tool_call_id.is_empty() {
@@ -827,12 +851,13 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                                 *res = Some(result);
                             } else {
                                 // 以防型別不對，直接替換
-                                if let TimelineItem::ToolStep { timestamp, tool_name, arguments, .. } = &timeline[idx] {
+                                if let TimelineItem::ToolStep { timestamp, tool_name, arguments, turn_no: t_no, .. } = &timeline[idx] {
                                     timeline[idx] = TimelineItem::ToolStep {
                                         timestamp: timestamp.clone(),
                                         tool_name: tool_name.clone(),
                                         arguments: arguments.clone(),
                                         result: Some(result),
+                                        turn_no: *t_no,
                                     };
                                 }
                             }

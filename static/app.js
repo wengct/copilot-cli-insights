@@ -883,7 +883,7 @@ function renderChart(sessions) {
   currentChartSessions = displaySessions;
 
   const labels = displaySessions.map((s, idx) => {
-    const timeStr = s.timestamp ? s.timestamp.substring(11, 16) : '';
+    const timeStr = s.timestamp ? formatLocalTime(s.timestamp, false) : '';
     return `${timeStr} (${s.session_name.substring(0, 10)}...)`;
   });
 
@@ -1161,7 +1161,7 @@ function renderSessionTable(sessions) {
     const tr = document.createElement('tr');
     
     // 格式化時間
-    const timeFormatted = s.timestamp ? s.timestamp.substring(11, 19) : '-';
+    const timeFormatted = s.timestamp ? formatLocalTime(s.timestamp, true) : '-';
 
     tr.innerHTML = `
       <td class="session-name-cell" title="${escapeHtml(s.session_name)}">
@@ -1285,7 +1285,7 @@ function renderTimeline(data) {
 
   // 渲染時間軸物件
   timeline.forEach(item => {
-    const timeStr = item.event_data.timestamp ? item.event_data.timestamp.substring(11, 19) : '';
+    const timeStr = item.event_data.timestamp ? formatLocalTime(item.event_data.timestamp, true) : '';
     const div = document.createElement('div');
     div.className = 'timeline-item-wrapper';
 
@@ -1537,6 +1537,24 @@ function formatDuration(ms) {
     return `${hours}:${pad(minutes)}:${pad(seconds)}`;
   } else {
     return `${minutes}:${pad(seconds)}`;
+  }
+}
+
+function formatLocalTime(isoString, includeSeconds = true) {
+  if (!isoString) return '';
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return '';
+    const pad = (num) => String(num).padStart(2, '0');
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    if (includeSeconds) {
+      const seconds = pad(date.getSeconds());
+      return `${hours}:${minutes}:${seconds}`;
+    }
+    return `${hours}:${minutes}`;
+  } catch (err) {
+    return '';
   }
 }
 

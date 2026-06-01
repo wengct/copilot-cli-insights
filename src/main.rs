@@ -426,11 +426,6 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
             }
         }
 
-        if let Some(ref cost) = entry.cost {
-            summary.total_duration_ms += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
-            summary.total_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
-        }
-
         let sid = entry.session_id.clone();
         sessions_map.entry(sid).or_default().push(entry.clone());
     }
@@ -471,10 +466,20 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
             .map(|e| e.delta_tokens.as_ref().and_then(|t| t.reasoning).unwrap_or(0))
             .sum::<u64>();
 
-        let session_duration = s_entries
-            .iter()
-            .map(|e| e.cost.as_ref().map(|c| c.total_api_duration_ms.unwrap_or(0.0) as u64).unwrap_or(0))
-            .sum::<u64>();
+        let session_duration = last_entry
+            .cost
+            .as_ref()
+            .and_then(|c| c.total_api_duration_ms)
+            .unwrap_or(0.0) as u64;
+
+        let session_requests = last_entry
+            .cost
+            .as_ref()
+            .and_then(|c| c.total_premium_requests)
+            .unwrap_or(0.0) as u64;
+
+        summary.total_duration_ms += session_duration;
+        summary.total_requests += session_requests;
 
         let total_cache_read_tokens = if session_tokens > 0 {
             session_cache_read
@@ -1028,11 +1033,6 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
                 }
             }
 
-            if let Some(ref cost) = e.cost {
-                day_duration += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
-                day_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
-            }
-
             let mut entry_cache = 0;
             if let Some(ref tokens) = e.delta_tokens {
                 entry_cache = tokens.cache_read.unwrap_or(0);
@@ -1051,6 +1051,21 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
             project_sessions.entry(cwd.clone()).or_default().insert(sid.clone());
             *project_tokens.entry(cwd.clone()).or_default() += entry_tokens;
             *project_cache_tokens.entry(cwd).or_default() += entry_cache;
+        }
+
+        let mut session_last_entries: std::collections::HashMap<String, UsageEntry> = std::collections::HashMap::new();
+        for e in entries_list {
+            let sid = e.session_id.clone();
+            let entry = session_last_entries.entry(sid).or_insert_with(|| e.clone());
+            if e.turn_no > entry.turn_no {
+                *entry = e.clone();
+            }
+        }
+        for (_, last_entry) in session_last_entries {
+            if let Some(ref cost) = last_entry.cost {
+                day_duration += cost.total_api_duration_ms.unwrap_or(0.0) as u64;
+                day_requests += cost.total_premium_requests.unwrap_or(0.0) as u64;
+            }
         }
 
         monthly_summary.total_tokens += day_tokens;

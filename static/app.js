@@ -12,6 +12,7 @@ let currentSessionReasoningTokens = 0;
 let currentSessionCwd = '';
 let currentSessionModel = '';
 let availableDates = [];
+let pricingRules = [];
 
 function getLocalDateString(date = new Date()) {
   const year = date.getFullYear();
@@ -94,8 +95,14 @@ const i18n = {
     col_reasoning: '推理',
     col_cache: '快取',
     col_total: '總計',
+    col_cost: '估算費用',
     col_duration: '耗時',
     col_time: '時間',
+    estimated_cost_label: '估算費用',
+    stat_cost_desc: '基於 pricing.csv 的估計金額',
+    btn_pricing_sheet: '💰 費用標準',
+    pricing_sheet_title: '💰 GitHub Copilot 費用標準表',
+    pricing_intro: '此費用為本地估算，單價依據 <code>pricing.csv</code> 載入。單位為 1M Tokens (每百萬個 Token) 的美金價格：',
     placeholder_select_date: '請先在左側選擇一個日期',
     placeholder_no_sessions: '今日無任何會話記錄',
     monthly_tokens_label: '月總消耗 Token',
@@ -242,8 +249,14 @@ const i18n = {
     col_reasoning: 'Reasoning',
     col_cache: 'Cache',
     col_total: 'Total',
+    col_cost: 'Est. Cost',
     col_duration: 'Duration',
     col_time: 'Time',
+    estimated_cost_label: 'Est. Cost',
+    stat_cost_desc: 'Estimated based on pricing.csv',
+    btn_pricing_sheet: '💰 Pricing Rates',
+    pricing_sheet_title: '💰 GitHub Copilot Pricing Rates',
+    pricing_intro: 'This cost is locally estimated based on rates loaded from <code>pricing.csv</code>. Rates are in USD per 1M Tokens (per million tokens):',
     placeholder_select_date: 'Please select a date on the left',
     placeholder_no_sessions: 'No session records found today',
     monthly_tokens_label: 'Monthly Total Tokens',
@@ -590,6 +603,11 @@ function initApp() {
 
   // 初始化前置設定教學 Modal 與事件
   initSetupGuide();
+
+  // 載入費用標準規則
+  fetchPricingRules();
+  // 初始化費用標準 Modal 與事件
+  initPricingModal();
 }
 
 // =========================================================================
@@ -850,6 +868,7 @@ function renderDashboard(data) {
   document.getElementById('mini-sessions').textContent = summary.total_sessions;
   document.getElementById('mini-tokens').textContent = formatToken(summary.total_tokens);
   document.getElementById('mini-cache').textContent = `${t('cache_read_label')}: ${formatToken(summary.total_cache_read_tokens)}`;
+  document.getElementById('mini-cost').textContent = formatCost(summary.total_cost_usd || 0);
   document.getElementById('mini-duration').textContent = formatDuration(summary.total_duration_ms);
   document.getElementById('mini-requests').textContent = summary.total_requests;
 
@@ -865,6 +884,8 @@ function renderDashboard(data) {
 
   document.getElementById('stat-reasoning-tokens').textContent = formatToken(summary.total_reasoning_tokens);
   document.getElementById('stat-reasoning-pct').textContent = `${t('ratio_label')}: ${calculatePercentage(summary.total_reasoning_tokens, summary.total_tokens)}`;
+
+  document.getElementById('stat-total-cost').textContent = formatCost(summary.total_cost_usd || 0);
 
   // 4. 繪製 Token 圖表
   renderChart(sessions);
@@ -1157,7 +1178,7 @@ function renderSessionTable(sessions) {
   tbody.innerHTML = '';
 
   if (sessions.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" class="placeholder-text">${t('placeholder_no_sessions')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="placeholder-text">${t('placeholder_no_sessions')}</td></tr>`;
     return;
   }
 
@@ -1179,6 +1200,7 @@ function renderSessionTable(sessions) {
       <td style="color: #a78bfa;">${formatToken(s.total_reasoning_tokens || 0)}</td>
       <td style="color: #34d399;">${formatToken(s.total_cache_read_tokens || 0)}</td>
       <td style="font-weight: 700; color: #fbbf24;">${formatToken(s.total_tokens)}</td>
+      <td style="font-weight: 700; color: var(--accent-cyan);">${formatCost(s.cost_usd || 0)}</td>
       <td>${formatDuration(s.duration_ms)}</td>
       <td style="color: var(--text-secondary);">${timeFormatted}</td>
     `;
@@ -1756,6 +1778,8 @@ function renderMonthlyDashboard(data) {
   document.getElementById('monthly-stat-sessions').textContent = summary.total_sessions;
   document.getElementById('monthly-stat-requests').textContent = t('monthly_requests_count').replace('{count}', formatNumber(summary.total_requests));
 
+  document.getElementById('monthly-stat-total-cost').textContent = formatCost(summary.total_cost_usd || 0);
+
   // 3. 繪製單月每日趨勢圖
   renderMonthlyChart(daily_breakdown);
 
@@ -1982,7 +2006,7 @@ function renderMonthlyModelsTable(models) {
   tbody.innerHTML = '';
 
   if (models.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" class="placeholder-text">${t('placeholder_no_models')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="placeholder-text">${t('placeholder_no_models')}</td></tr>`;
     return;
   }
 
@@ -1998,6 +2022,7 @@ function renderMonthlyModelsTable(models) {
         ${formatToken(m.total_tokens)}
         ${m.total_cache_read_tokens ? `<div style="font-size: 0.72rem; font-weight: normal; color: #a5b4fc; margin-top: 3px;" title="${t('chart_cache_label')}">${t('cache_prefix')}${formatToken(m.total_cache_read_tokens)}</div>` : ''}
       </td>
+      <td style="font-weight: 700; color: var(--neon-gold);">${formatCost(m.cost_usd || 0)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -2011,7 +2036,7 @@ function renderMonthlyDailySummaryTable(dailyBreakdown) {
   tbody.innerHTML = '';
 
   if (!dailyBreakdown || dailyBreakdown.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="placeholder-text">${t('placeholder_no_daily_summary')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="placeholder-text">${t('placeholder_no_daily_summary')}</td></tr>`;
     return;
   }
 
@@ -2031,6 +2056,7 @@ function renderMonthlyDailySummaryTable(dailyBreakdown) {
       <td style="color: #a78bfa;">${formatToken(entry.total_reasoning_tokens || 0)}</td>
       <td style="color: #34d399;">${formatToken(entry.total_cache_read_tokens || 0)}</td>
       <td style="font-weight: 700; color: #fbbf24;">${formatToken(entry.total_tokens)}</td>
+      <td style="font-weight: 700; color: var(--neon-gold);">${formatCost(entry.cost_usd || 0)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -2053,7 +2079,8 @@ function sortAndRenderMonthlyDailyTable() {
         'output': 'total_output_tokens',
         'reasoning': 'total_reasoning_tokens',
         'cache': 'total_cache_read_tokens',
-        'total': 'total_tokens'
+        'total': 'total_tokens',
+        'cost': 'cost_usd'
       };
       const field = keyMap[monthlyDailySortColumn] || monthlyDailySortColumn;
       valA = a[field];
@@ -2433,4 +2460,98 @@ function switchToDailyDate(date) {
     // switchTab('daily') 內部會自動載入 dateSelect.value
     switchTab('daily');
   }
+}
+
+// =========================================================================
+// Pricing Rules & Modal Logic
+// =========================================================================
+async function fetchPricingRules() {
+  try {
+    const res = await fetch('/api/pricing');
+    if (res.ok) {
+      pricingRules = await res.json();
+      console.log('Loaded pricing rules:', pricingRules);
+    } else {
+      console.error('Failed to fetch pricing rules');
+    }
+  } catch (err) {
+    console.error('Error fetching pricing rules:', err);
+  }
+}
+
+function initPricingModal() {
+  const pricingBtn = document.getElementById('btn-pricing-sheet');
+  const closeBtn = document.getElementById('close-pricing-modal-btn');
+  const modalOverlay = document.getElementById('pricing-modal');
+
+  if (pricingBtn && modalOverlay) {
+    pricingBtn.addEventListener('click', openPricingModal);
+  }
+
+  if (closeBtn && modalOverlay) {
+    closeBtn.addEventListener('click', closePricingModal);
+    modalOverlay.addEventListener('click', (e) => {
+      if (e.target === modalOverlay) {
+        closePricingModal();
+      }
+    });
+  }
+
+  // Bind Escape key to close pricing modal
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closePricingModal();
+    }
+  });
+}
+
+function openPricingModal() {
+  const modal = document.getElementById('pricing-modal');
+  if (modal) {
+    modal.classList.add('active');
+    renderPricingModalTable();
+  }
+}
+
+function closePricingModal() {
+  const modal = document.getElementById('pricing-modal');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+}
+
+function renderPricingModalTable() {
+  const tbody = document.getElementById('pricing-table-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!pricingRules || pricingRules.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="placeholder-text">載入中...</td></tr>';
+    return;
+  }
+
+  pricingRules.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'default';
+    tr.innerHTML = `
+      <td style="font-weight: 600;"><span class="badge highlight">${escapeHtml(r.model_name)}</span></td>
+      <td>${escapeHtml(r.deployment_type)}</td>
+      <td>${escapeHtml(r.unit)}</td>
+      <td style="color: var(--accent-cyan); font-weight: 600;">$${r.input_price.toFixed(2)}</td>
+      <td style="color: #34d399; font-weight: 600;">$${r.cache_input_price.toFixed(2)}</td>
+      <td style="color: #a78bfa; font-weight: 600;">$${r.output_price.toFixed(2)}</td>
+      <td style="color: var(--text-secondary);">${escapeHtml(r.batch_api_price)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function formatCost(cost) {
+  if (cost === null || cost === undefined) return '-';
+  const c = Number(cost);
+  if (isNaN(c)) return '-';
+  if (c === 0) return '$0.00';
+  if (c < 0.001) return '$' + c.toFixed(5);
+  if (c < 0.01) return '$' + c.toFixed(4);
+  return '$' + c.toFixed(3);
 }

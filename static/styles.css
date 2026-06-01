@@ -23,6 +23,7 @@
   --purple-grad: linear-gradient(135deg, #8e2de2 0%, #4a00e0 100%);
   --neon-green: #00ff87;
   --neon-red: #ff007f;
+  --neon-gold: #fbbf24;
   
   --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.15);
@@ -65,6 +66,7 @@
   --purple-grad: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
   --neon-green: #10b981;
   --neon-red: #ef4444;
+  --neon-gold: #d97706;
   
   --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   --shadow-lg: 0 10px 15px -3px rgba(148, 163, 184, 0.1), 0 4px 6px -2px rgba(148, 163, 184, 0.05);
@@ -404,6 +406,16 @@ body {
 .stat-card.highlight {
   background: linear-gradient(135deg, rgba(0, 242, 254, 0.1) 0%, rgba(79, 172, 254, 0.05) 100%);
   border-color: rgba(0, 242, 254, 0.2);
+}
+
+.stat-card.highlight-gold {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.1) 0%, rgba(217, 119, 6, 0.05) 100%);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
+[data-theme="light"] .stat-card.highlight-gold {
+  background: linear-gradient(135deg, rgba(217, 119, 6, 0.08) 0%, rgba(251, 191, 36, 0.03) 100%);
+  border-color: rgba(217, 119, 6, 0.15);
 }
 
 .stat-card.mini {

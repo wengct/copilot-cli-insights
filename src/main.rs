@@ -42,6 +42,7 @@ async fn main() {
         .route("/api/session/:session_id", get(get_session_details))
         .route("/api/months", get(get_available_months))
         .route("/api/monthly/:year_month", get(get_monthly_details))
+        .route("/api/pricing", get(get_pricing))
         .route("/api/sync", get(trigger_manual_sync))
         // 靜態檔案路由： fallback 到 static/index.html，並將所有 / 請求導向 static 目錄
         .nest_service("/static", ServeDir::new("static"))
@@ -270,6 +271,141 @@ struct UsageDetailsResponse {
     raw_entries: Vec<UsageEntry>,
 }
 
+#[derive(Debug, Clone)]
+struct PricingRule {
+    model_name: String,
+    input_price: f64,       // USD per 1M tokens
+    cache_input_price: f64, // USD per 1M tokens
+    output_price: f64,      // USD per 1M tokens
+}
+
+#[derive(Serialize)]
+struct PricingEntry {
+    model_name: String,
+    deployment_type: String,
+    unit: String,
+    input_price: f64,
+    cache_input_price: f64,
+    output_price: f64,
+    batch_api_price: String,
+}
+
+fn load_pricing_rules() -> Vec<PricingRule> {
+    let mut rules = Vec::new();
+    let file_path = PathBuf::from("pricing.csv");
+    if let Ok(file) = File::open(&file_path) {
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        if let Some(Ok(_header)) = lines.next() {
+            for line in lines.flatten() {
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 7 {
+                    let input_price = parts[3].trim().parse::<f64>().unwrap_or(0.0);
+                    let cache_input_price = parts[4].trim().parse::<f64>().unwrap_or(0.0);
+                    let output_price = parts[5].trim().parse::<f64>().unwrap_or(0.0);
+                    rules.push(PricingRule {
+                        model_name: parts[0].trim().to_string(),
+                        input_price,
+                        cache_input_price,
+                        output_price,
+                    });
+                }
+            }
+        }
+    }
+    
+    // If loading fails or is empty, provide hardcoded defaults matching the CSV
+    if rules.is_empty() {
+        rules = vec![
+            PricingRule { model_name: "GPT-5.5".to_string(), input_price: 5.0, cache_input_price: 0.50, output_price: 30.0 },
+            PricingRule { model_name: "GPT-5.4 (<272k)".to_string(), input_price: 2.50, cache_input_price: 0.25, output_price: 15.0 },
+            PricingRule { model_name: "GPT-5.4 (>272k)".to_string(), input_price: 5.0, cache_input_price: 0.50, output_price: 22.50 },
+            PricingRule { model_name: "GPT-5.4-mini".to_string(), input_price: 0.75, cache_input_price: 0.08, output_price: 4.50 },
+            PricingRule { model_name: "GPT-5.3-Codex".to_string(), input_price: 1.75, cache_input_price: 0.18, output_price: 14.0 },
+        ];
+    }
+    rules
+}
+
+fn calculate_cost(rules: &[PricingRule], model_name: &str, input_tokens: u64, output_tokens: u64, cache_read_tokens: u64) -> f64 {
+    let model = model_name.to_lowercase();
+    let mut selected_rule = None;
+
+    if model.contains("gpt-5.5") {
+        selected_rule = rules.iter().find(|r| r.model_name.to_lowercase().contains("gpt-5.5"));
+    } else if model.contains("gpt-5.4-mini") || model.contains("gpt-5.4 mini") {
+        selected_rule = rules.iter().find(|r| r.model_name.to_lowercase().contains("gpt-5.4-mini"));
+    } else if model.contains("gpt-5.4") {
+        if input_tokens > 272_000 {
+            selected_rule = rules.iter().find(|r| r.model_name.contains(">272k"));
+        } else {
+            selected_rule = rules.iter().find(|r| r.model_name.contains("<272k"));
+        }
+        if selected_rule.is_none() {
+            selected_rule = rules.iter().find(|r| r.model_name.to_lowercase().contains("gpt-5.4"));
+        }
+    } else if model.contains("gpt-5.3-codex") || model.contains("gpt-5.3") {
+        selected_rule = rules.iter().find(|r| r.model_name.to_lowercase().contains("gpt-5.3"));
+    }
+
+    let rule = selected_rule.unwrap_or_else(|| {
+        rules.iter().find(|r| r.model_name.to_lowercase().contains("gpt-5.3"))
+            .unwrap_or(&rules[rules.len() - 1])
+    });
+
+    let uncached_input = if input_tokens >= cache_read_tokens {
+        input_tokens - cache_read_tokens
+    } else {
+        0
+    };
+
+    let cost = (uncached_input as f64 * rule.input_price 
+        + cache_read_tokens as f64 * rule.cache_input_price 
+        + output_tokens as f64 * rule.output_price) / 1_000_000.0;
+        
+    cost
+}
+
+async fn get_pricing() -> impl IntoResponse {
+    let mut entries = Vec::new();
+    let file_path = PathBuf::from("pricing.csv");
+    if let Ok(file) = File::open(&file_path) {
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        if let Some(Ok(_header)) = lines.next() {
+            for line in lines.flatten() {
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 7 {
+                    let input_price = parts[3].trim().parse::<f64>().unwrap_or(0.0);
+                    let cache_input_price = parts[4].trim().parse::<f64>().unwrap_or(0.0);
+                    let output_price = parts[5].trim().parse::<f64>().unwrap_or(0.0);
+                    entries.push(PricingEntry {
+                        model_name: parts[0].trim().to_string(),
+                        deployment_type: parts[1].trim().to_string(),
+                        unit: parts[2].trim().to_string(),
+                        input_price,
+                        cache_input_price,
+                        output_price,
+                        batch_api_price: parts[6].trim().to_string(),
+                    });
+                }
+            }
+        }
+    }
+    
+    if entries.is_empty() {
+        entries = vec![
+            PricingEntry { model_name: "GPT-5.5".to_string(), deployment_type: "Global".to_string(), unit: "1M Tokens".to_string(), input_price: 5.0, cache_input_price: 0.50, output_price: 30.0, batch_api_price: "N/A".to_string() },
+            PricingEntry { model_name: "GPT-5.4 (<272k)".to_string(), deployment_type: "Global".to_string(), unit: "1M Tokens".to_string(), input_price: 2.50, cache_input_price: 0.25, output_price: 15.0, batch_api_price: "N/A".to_string() },
+            PricingEntry { model_name: "GPT-5.4 (>272k)".to_string(), deployment_type: "Global".to_string(), unit: "1M Tokens".to_string(), input_price: 5.0, cache_input_price: 0.50, output_price: 22.50, batch_api_price: "1.25/0.13/7.50".to_string() },
+            PricingEntry { model_name: "GPT-5.4-mini".to_string(), deployment_type: "Global".to_string(), unit: "1M Tokens".to_string(), input_price: 0.75, cache_input_price: 0.08, output_price: 4.50, batch_api_price: "N/A".to_string() },
+            PricingEntry { model_name: "GPT-5.3-Codex".to_string(), deployment_type: "Global".to_string(), unit: "1M Tokens".to_string(), input_price: 1.75, cache_input_price: 0.18, output_price: 14.0, batch_api_price: "N/A".to_string() },
+        ];
+    }
+
+    Json(entries).into_response()
+}
+
 #[derive(Serialize, Default)]
 struct DaySummary {
     total_sessions: usize,
@@ -280,6 +416,7 @@ struct DaySummary {
     total_cache_read_tokens: u64,
     total_duration_ms: u64,
     total_requests: u64,
+    total_cost_usd: f64,
 }
 
 #[derive(Serialize)]
@@ -296,6 +433,7 @@ struct SessionSummary {
     max_turn_no: u32,
     timestamp: String,
     duration_ms: u64,
+    cost_usd: f64,
 }
 
 async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
@@ -432,6 +570,8 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
 
     summary.total_sessions = sessions_map.len();
 
+    let pricing_rules = load_pricing_rules();
+
     // 整理每個 Session 的統計
     let mut sessions_summary = Vec::new();
     for (session_id, s_entries) in sessions_map {
@@ -493,19 +633,32 @@ async fn get_usage_details(Path(date): Path<String>) -> impl IntoResponse {
             last_entry.tokens.as_ref().and_then(|t| t.reasoning).unwrap_or(0)
         };
 
+        let total_input_tokens = if session_tokens > 0 { session_input_tokens } else { last_entry.tokens.as_ref().map(|t| t.input).unwrap_or(0) };
+        let total_output_tokens = if session_tokens > 0 { session_output_tokens } else { last_entry.tokens.as_ref().map(|t| t.output).unwrap_or(0) };
+
+        let cost_usd = calculate_cost(
+            &pricing_rules,
+            &last_entry.model.clone().unwrap_or_else(|| "Unknown Model".to_string()),
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_read_tokens,
+        );
+        summary.total_cost_usd += cost_usd;
+
         sessions_summary.push(SessionSummary {
             session_id,
             session_name: last_entry.session_name.unwrap_or_else(|| "Start Coding Session".to_string()),
             cwd: last_entry.cwd.unwrap_or_default(),
             model: last_entry.model.unwrap_or_else(|| "Unknown Model".to_string()),
             total_tokens: if session_tokens > 0 { session_tokens } else { last_entry.tokens.as_ref().map(|t| t.total).unwrap_or(0) },
-            total_input_tokens: if session_tokens > 0 { session_input_tokens } else { last_entry.tokens.as_ref().map(|t| t.input).unwrap_or(0) },
-            total_output_tokens: if session_tokens > 0 { session_output_tokens } else { last_entry.tokens.as_ref().map(|t| t.output).unwrap_or(0) },
+            total_input_tokens,
+            total_output_tokens,
             total_cache_read_tokens,
             total_reasoning_tokens,
             max_turn_no: s_entries.iter().map(|e| e.turn_no).max().unwrap_or(1),
             timestamp: s_entries[0].timestamp.clone(),
             duration_ms: session_duration,
+            cost_usd,
         });
     }
 
@@ -946,6 +1099,7 @@ struct DailyBreakdownEntry {
     total_reasoning_tokens: u64,
     total_duration_ms: u64,
     total_requests: u64,
+    cost_usd: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -953,7 +1107,10 @@ struct ModelUsageSummary {
     model: String,
     session_count: usize,
     total_tokens: u64,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
     total_cache_read_tokens: u64,
+    cost_usd: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -1079,11 +1236,14 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
         }
     }
 
+    let pricing_rules = load_pricing_rules();
     let mut daily_breakdown = Vec::new();
     let mut monthly_summary = DaySummary::default();
     
     let mut model_sessions: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     let mut model_tokens: HashMap<String, u64> = HashMap::new();
+    let mut model_input_tokens: HashMap<String, u64> = HashMap::new();
+    let mut model_output_tokens: HashMap<String, u64> = HashMap::new();
     let mut model_cache_tokens: HashMap<String, u64> = HashMap::new();
     
     let mut project_sessions: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
@@ -1111,8 +1271,12 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
             day_sessions.insert(sid.clone());
 
             let mut entry_tokens = 0;
+            let mut entry_input = 0;
+            let mut entry_output = 0;
             if let Some(ref tokens) = e.delta_tokens {
                 entry_tokens = tokens.total;
+                entry_input = tokens.input;
+                entry_output = tokens.output;
                 day_tokens += tokens.total;
                 day_input += tokens.input;
                 day_output += tokens.output;
@@ -1121,6 +1285,8 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
             } else if let Some(ref tokens) = e.tokens {
                 if e.turn_no == 1 {
                     entry_tokens = tokens.total;
+                    entry_input = tokens.input;
+                    entry_output = tokens.output;
                     day_tokens += tokens.total;
                     day_input += tokens.input;
                     day_output += tokens.output;
@@ -1141,6 +1307,8 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
             let model = e.model.clone().unwrap_or_else(|| "Unknown Model".to_string());
             model_sessions.entry(model.clone()).or_default().insert(sid.clone());
             *model_tokens.entry(model.clone()).or_default() += entry_tokens;
+            *model_input_tokens.entry(model.clone()).or_default() += entry_input;
+            *model_output_tokens.entry(model.clone()).or_default() += entry_output;
             *model_cache_tokens.entry(model).or_default() += entry_cache;
 
             let cwd = e.cwd.clone().unwrap_or_else(|| "Unknown Path".to_string());
@@ -1172,6 +1340,61 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
         monthly_summary.total_duration_ms += day_duration;
         monthly_summary.total_requests += day_requests;
 
+        // Group entries of the day by session to calculate exact session costs
+        let mut day_sessions_map: HashMap<String, Vec<UsageEntry>> = HashMap::new();
+        for e in entries_list {
+            day_sessions_map.entry(e.session_id.clone()).or_default().push(e.clone());
+        }
+
+        let mut day_cost_usd = 0.0;
+        for (_session_id, s_entries) in &day_sessions_map {
+            let last_entry = s_entries
+                .iter()
+                .max_by_key(|e| e.turn_no)
+                .cloned()
+                .unwrap_or_else(|| s_entries[0].clone());
+
+            let session_tokens = s_entries
+                .iter()
+                .map(|e| e.delta_tokens.as_ref().map(|t| t.total).unwrap_or(0))
+                .sum::<u64>();
+
+            let session_input_tokens = s_entries
+                .iter()
+                .map(|e| e.delta_tokens.as_ref().map(|t| t.input).unwrap_or(0))
+                .sum::<u64>();
+
+            let session_output_tokens = s_entries
+                .iter()
+                .map(|e| e.delta_tokens.as_ref().map(|t| t.output).unwrap_or(0))
+                .sum::<u64>();
+
+            let session_cache_read = s_entries
+                .iter()
+                .map(|e| e.delta_tokens.as_ref().and_then(|t| t.cache_read).unwrap_or(0))
+                .sum::<u64>();
+
+            let total_cache_read_tokens = if session_tokens > 0 {
+                session_cache_read
+            } else {
+                last_entry.tokens.as_ref().and_then(|t| t.cache_read).unwrap_or(0)
+            };
+
+            let total_input_tokens = if session_tokens > 0 { session_input_tokens } else { last_entry.tokens.as_ref().map(|t| t.input).unwrap_or(0) };
+            let total_output_tokens = if session_tokens > 0 { session_output_tokens } else { last_entry.tokens.as_ref().map(|t| t.output).unwrap_or(0) };
+
+            let cost = calculate_cost(
+                &pricing_rules,
+                &last_entry.model.clone().unwrap_or_else(|| "Unknown Model".to_string()),
+                total_input_tokens,
+                total_output_tokens,
+                total_cache_read_tokens,
+            );
+            day_cost_usd += cost;
+        }
+
+        monthly_summary.total_cost_usd += day_cost_usd;
+
         daily_breakdown.push(DailyBreakdownEntry {
             date: date_str,
             total_sessions: day_sessions.len(),
@@ -1182,6 +1405,7 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
             total_reasoning_tokens: day_reasoning,
             total_duration_ms: day_duration,
             total_requests: day_requests,
+            cost_usd: day_cost_usd,
         });
     }
 
@@ -1196,12 +1420,18 @@ async fn get_monthly_details(Path(year_month): Path<String>) -> impl IntoRespons
     let mut top_models = Vec::new();
     for (model, sids) in model_sessions {
         let total_tokens = model_tokens.get(&model).cloned().unwrap_or(0);
+        let total_input_tokens = model_input_tokens.get(&model).cloned().unwrap_or(0);
+        let total_output_tokens = model_output_tokens.get(&model).cloned().unwrap_or(0);
         let total_cache_read_tokens = model_cache_tokens.get(&model).cloned().unwrap_or(0);
+        let cost_usd = calculate_cost(&pricing_rules, &model, total_input_tokens, total_output_tokens, total_cache_read_tokens);
         top_models.push(ModelUsageSummary {
             model,
             session_count: sids.len(),
             total_tokens,
+            total_input_tokens,
+            total_output_tokens,
             total_cache_read_tokens,
+            cost_usd,
         });
     }
     top_models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));

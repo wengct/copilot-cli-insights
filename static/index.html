@@ -111,6 +111,10 @@
           <span class="sub-label" id="mini-cache">快取讀取: -</span>
         </div>
         <div class="stat-card mini">
+          <span class="label" data-i18n="col_cost">估算費用</span>
+          <span class="value" id="mini-cost">-</span>
+        </div>
+        <div class="stat-card mini">
           <span class="label" data-i18n="stat_api_duration">累積 API 耗時</span>
           <span class="value" id="mini-duration">-</span>
         </div>
@@ -141,6 +145,7 @@
             <option value="zh-TW">繁體中文</option>
             <option value="en">English</option>
           </select>
+          <button id="btn-pricing-sheet" class="setup-guide-btn" data-i18n-title="btn_pricing_sheet" title="費用標準">💰 <span data-i18n="btn_pricing_sheet">費用標準</span></button>
           <button id="btn-setup-guide" class="setup-guide-btn" data-i18n-title="setup_guide_title" title="前置作業啟用教學">⚙️ <span data-i18n="setup_guide">啟用教學</span></button>
           <button id="btn-sync-db" class="sync-db-btn" data-i18n-title="sync_db_title" title="立即手動同步日誌檔到 SQLite 資料庫">⚡ <span data-i18n="sync_db">同步資料庫</span></button>
           <button id="theme-toggle-btn" class="theme-toggle-btn" title="切換主題">🌞</button>
@@ -191,6 +196,15 @@
               <span class="sub-label" id="stat-reasoning-pct">佔比: 0%</span>
             </div>
           </div>
+
+          <div class="stat-card highlight-gold">
+            <div class="card-icon">💰</div>
+            <div class="stat-info">
+              <span class="label" data-i18n="estimated_cost_label">估算費用</span>
+              <span class="value" id="stat-total-cost">$0.00</span>
+              <span class="sub-label" id="stat-cost-desc" data-i18n="stat_cost_desc">基於 pricing.csv</span>
+            </div>
+          </div>
         </section>
 
         <!-- Charts Section -->
@@ -221,13 +235,14 @@
                   <th class="sortable" data-sort="total_reasoning_tokens"><span data-i18n="col_reasoning">推理</span> <span class="sort-icon"></span></th>
                   <th class="sortable" data-sort="total_cache_read_tokens"><span data-i18n="col_cache">快取</span> <span class="sort-icon"></span></th>
                   <th class="sortable" data-sort="total_tokens"><span data-i18n="col_total">總計</span> <span class="sort-icon"></span></th>
+                  <th class="sortable" data-sort="cost_usd"><span data-i18n="col_cost">估算費用</span> <span class="sort-icon"></span></th>
                   <th class="sortable" data-sort="duration_ms"><span data-i18n="col_duration">耗時</span> <span class="sort-icon"></span></th>
                   <th class="sortable" data-sort="timestamp"><span data-i18n="col_time">時間</span> <span class="sort-icon"></span></th>
                 </tr>
               </thead>
               <tbody id="session-list-body">
                 <tr>
-                  <td colspan="10" class="placeholder-text" data-i18n="placeholder_select_date">請先在左側選擇一個日期</td>
+                  <td colspan="11" class="placeholder-text" data-i18n="placeholder_select_date">請先在左側選擇一個日期</td>
                 </tr>
               </tbody>
             </table>
@@ -272,6 +287,15 @@
               <span class="label" data-i18n="monthly_sessions_label">月總會話數</span>
               <span class="value" id="monthly-stat-sessions">0</span>
               <span class="sub-label" id="monthly-stat-requests">總請求: 0 次</span>
+            </div>
+          </div>
+
+          <div class="stat-card highlight-gold">
+            <div class="card-icon">💰</div>
+            <div class="stat-info">
+              <span class="label" data-i18n="estimated_cost_label">估算費用</span>
+              <span class="value" id="monthly-stat-total-cost">$0.00</span>
+              <span class="sub-label" id="monthly-stat-cost-desc" data-i18n="stat_cost_desc">基於 pricing.csv</span>
             </div>
           </div>
         </section>
@@ -325,11 +349,12 @@
                     <th data-i18n="col_model">使用的模型</th>
                     <th data-i18n="col_sessions_count">會話數</th>
                     <th data-i18n="col_total">總 Token</th>
+                    <th data-i18n="col_cost">估算費用</th>
                   </tr>
                 </thead>
                 <tbody id="monthly-models-body">
                   <tr>
-                    <td colspan="4" class="placeholder-text" data-i18n="placeholder_no_models">無模型數據</td>
+                    <td colspan="5" class="placeholder-text" data-i18n="placeholder_no_models">無模型數據</td>
                   </tr>
                 </tbody>
               </table>
@@ -352,11 +377,12 @@
                     <th class="sortable" data-sort="reasoning" data-table="monthly"><span data-i18n="col_reasoning">推理</span> <span class="sort-icon"></span></th>
                     <th class="sortable" data-sort="cache" data-table="monthly"><span data-i18n="col_cache">快取</span> <span class="sort-icon"></span></th>
                     <th class="sortable" data-sort="total" data-table="monthly"><span data-i18n="col_total">總計</span> <span class="sort-icon"></span></th>
+                    <th class="sortable" data-sort="cost" data-table="monthly"><span data-i18n="col_cost">估算費用</span> <span class="sort-icon"></span></th>
                   </tr>
                 </thead>
                 <tbody id="monthly-daily-summary-body">
                   <tr>
-                    <td colspan="6" class="placeholder-text" data-i18n="placeholder_no_daily_summary">無每日彙總數據</td>
+                    <td colspan="7" class="placeholder-text" data-i18n="placeholder_no_daily_summary">無每日彙總數據</td>
                   </tr>
                 </tbody>
               </table>
@@ -525,6 +551,43 @@
               <pre><code>jq . ~/.copilot/settings.json</code></pre>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pricing Rates Modal -->
+  <div class="modal-overlay" id="pricing-modal">
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h2 data-i18n="pricing_sheet_title">💰 GitHub Copilot 費用標準表</h2>
+        </div>
+        <button class="close-btn" id="close-pricing-modal-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-text" style="margin-bottom: 16px;" data-i18n="pricing_intro">
+          此費用為本地估算，單價依據 <code>pricing.csv</code> 載入。單位為 1M Tokens (每百萬個 Token) 的美金價格：
+        </p>
+        <div class="table-wrapper">
+          <table class="premium-table">
+            <thead>
+              <tr>
+                <th>模型名稱 (Model Name)</th>
+                <th>部署類型 (Type)</th>
+                <th>單位 (Unit)</th>
+                <th>輸入價格 (Input Price)</th>
+                <th>快取輸入價格 (Cached Input)</th>
+                <th>輸出價格 (Output Price)</th>
+                <th>批次 API 價格 (Batch API)</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-table-body">
+              <tr>
+                <td colspan="7" class="placeholder-text">載入中...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

@@ -754,14 +754,23 @@ body {
 }
 
 /* Session Metadata in Drawer */
-.session-meta-grid {
+.session-meta-grid,
+.session-stats-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   background: var(--bg-meta-grid);
   border: 1px solid var(--glass-border);
   border-radius: 16px;
   padding: 16px;
+}
+
+.session-meta-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.session-stats-grid {
+  grid-template-columns: repeat(5, 1fr);
+  margin-top: 12px;
 }
 
 .meta-item {
@@ -783,7 +792,7 @@ body {
 }
 
 .meta-item.full-width {
-  grid-column: span 5;
+  grid-column: span 2;
 }
 
 .meta-item.span-2 {
@@ -795,10 +804,15 @@ body {
     grid-template-columns: repeat(2, 1fr);
     gap: 10px;
   }
-  .meta-item.full-width {
+  .session-stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  .meta-item.full-width,
+  .meta-item.span-2 {
     grid-column: span 2;
   }
-  .meta-item.span-2 {
+  .session-stats-grid .meta-item.stat-item.highlight {
     grid-column: span 2;
   }
 }
@@ -807,9 +821,16 @@ body {
   .session-meta-grid {
     grid-template-columns: 1fr;
   }
+  .session-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
   .meta-item.full-width,
   .meta-item.span-2 {
     grid-column: span 1;
+  }
+  .session-stats-grid .meta-item.stat-item.highlight {
+    grid-column: span 2;
   }
 }
 

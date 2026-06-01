@@ -129,6 +129,8 @@ const i18n = {
     thinking_tools: '思考中：調用工具指令...',
     copy_markdown: '複製 Markdown',
     copy_markdown_title: '複製 LLM 回答的原始 Markdown 內容',
+    expand_reply: '展開回覆',
+    collapse_reply: '收摺回覆',
     no_returned_data: '無回傳資料',
     data_truncated: '... [資料過長已被看板截斷顯示] ...',
     tool_arguments: '調用參數 (Arguments)',
@@ -275,6 +277,8 @@ const i18n = {
     thinking_tools: 'Thinking: Calling tool commands...',
     copy_markdown: 'Copy Markdown',
     copy_markdown_title: 'Copy raw Markdown response',
+    expand_reply: 'Expand Reply',
+    collapse_reply: 'Collapse Reply',
     no_returned_data: 'No returned data',
     data_truncated: '... [Data too long, truncated by the dashboard] ...',
     tool_arguments: 'Arguments',
@@ -1204,8 +1208,14 @@ async function openSessionTimeline(sessionId, sessionName, totalTokens, cacheRea
   currentSessionCwd = cwd || '';
   currentSessionModel = model || '';
 
-  // 設定基礎抬頭
-  document.getElementById('drawer-session-name').textContent = sessionName;
+  // 設定基礎抬頭 (截斷至 100 字元，滑鼠移過去可以看到全部)
+  let displayName = sessionName || '';
+  if (displayName.length > 100) {
+    displayName = displayName.substring(0, 100) + '...';
+  }
+  const nameEl = document.getElementById('drawer-session-name');
+  nameEl.textContent = displayName;
+  nameEl.title = sessionName || '';
   document.getElementById('drawer-session-id').textContent = sessionId;
 
   // 更新會話 Token & 基礎資訊（立即呈現在畫面上）
@@ -1283,7 +1293,9 @@ function renderTimeline(data) {
     return;
   }
 
-  // 渲染時間軸物件
+  // 渲染時間軸物件，使用單一回合序號進行對齊
+  let currentTurnNo = 0;
+
   timeline.forEach(item => {
     const timeStr = item.event_data.timestamp ? formatLocalTime(item.event_data.timestamp, true) : '';
     const div = document.createElement('div');
@@ -1291,6 +1303,7 @@ function renderTimeline(data) {
 
     switch (item.event_type) {
       case 'UserPrompt': {
+        currentTurnNo++;
         const prompt = item.event_data.prompt;
         
         let attachmentsHTML = '';
@@ -1313,7 +1326,7 @@ function renderTimeline(data) {
           <div class="timeline-dot"></div>
           <div class="user-bubble">
             <div class="bubble-header">
-              <span class="sender">${t('sender_user')}</span>
+              <span class="sender">${t('sender_user')} <span class="turn-no-badge">#${currentTurnNo}</span></span>
               <span class="time">${timeStr}</span>
             </div>
             <div class="prompt-text">${escapeHtml(prompt)}</div>
@@ -1368,16 +1381,43 @@ function renderTimeline(data) {
           <div class="timeline-dot"></div>
           <div class="assistant-bubble">
             <div class="bubble-header">
-              <span class="sender">${t('sender_agent')} (${escapeHtml(model)})</span>
+              <span class="sender">${t('sender_agent')} (${escapeHtml(model)}) <span class="turn-no-badge">#${currentTurnNo > 0 ? currentTurnNo : 1}</span></span>
               <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 ${tokenBadge}
                 ${copyButtonHtml}
                 <span class="time">${timeStr}</span>
               </div>
             </div>
-            <div class="reply-content">${replyHtml}</div>
+            <div class="reply-content-wrapper">
+              <div class="reply-content collapsed">${replyHtml}</div>
+              <button class="reply-toggle-btn">
+                <span class="btn-text">${t('expand_reply')}</span> <span class="arrow">▼</span>
+              </button>
+            </div>
           </div>
         `;
+
+        // 綁定摺疊按鈕事件
+        const replyContent = div.querySelector('.reply-content');
+        const toggleBtn = div.querySelector('.reply-toggle-btn');
+        if (replyContent && toggleBtn) {
+          toggleBtn.addEventListener('click', () => {
+            const isCollapsed = replyContent.classList.contains('collapsed');
+            if (isCollapsed) {
+              replyContent.classList.remove('collapsed');
+              replyContent.classList.add('expanded');
+              toggleBtn.classList.add('expanded');
+              toggleBtn.querySelector('.btn-text').textContent = t('collapse_reply');
+              toggleBtn.querySelector('.arrow').textContent = '▲';
+            } else {
+              replyContent.classList.remove('expanded');
+              replyContent.classList.add('collapsed');
+              toggleBtn.classList.remove('expanded');
+              toggleBtn.querySelector('.btn-text').textContent = t('expand_reply');
+              toggleBtn.querySelector('.arrow').textContent = '▼';
+            }
+          });
+        }
 
         // 綁定複製 Markdown 事件
         if (replyMarkdown) {

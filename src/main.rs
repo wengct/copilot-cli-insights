@@ -635,8 +635,8 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
     // 用於關聯 ToolStep 的狀態對應表 (toolCallId -> TimelineItem 索引)
     let mut tool_calls_map: HashMap<String, usize> = HashMap::new();
     
-    // 用於計算當前 assistant 氣泡的回合序號，以便與 SQLite 中的 turn_no 進行關聯
-    let mut assistant_turn_count = 0;
+    // 用於記錄目前對話的回合序號（由 user.message 觸發遞增），以確保與 SQLite 中的 turn_no 完美精確對齊
+    let mut current_turn_no = 0;
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -679,6 +679,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                 });
             }
             "user.message" => {
+                current_turn_no += 1;
                 if let Some(d) = data {
                     let prompt = d.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
                     let transformed_prompt = d.get("transformedContent").and_then(|c| c.as_str()).map(|s| s.to_string());
@@ -693,7 +694,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                 }
             }
             "assistant.message" => {
-                assistant_turn_count += 1;
+                let active_turn = if current_turn_no == 0 { 1 } else { current_turn_no };
                 if let Some(d) = data {
                     let reply = d.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
                     let model = d.get("model").and_then(|m| m.as_str()).unwrap_or("GPT").to_string();
@@ -728,7 +729,7 @@ async fn get_session_details(Path(session_id): Path<String>) -> impl IntoRespons
                     }
 
                     // 如果從 events.jsonl 本身解析出的 Token 數據不齊全，則嘗試從 SQLite 資料庫中對應 turn_no 的 delta_tokens 數據補齊
-                    if let Some(db_stats) = db_entries.get(&assistant_turn_count) {
+                    if let Some(db_stats) = db_entries.get(&active_turn) {
                         if input_tokens.is_none() || input_tokens == Some(0) {
                             input_tokens = Some(db_stats.input);
                         }

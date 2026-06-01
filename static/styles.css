@@ -997,6 +997,28 @@ body {
   color: #a78bfa;
 }
 
+/* Turn No Badge in Bubbles */
+.turn-no-badge {
+  display: inline-block;
+  background: rgba(167, 139, 250, 0.15);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  color: #a78bfa;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* Collapsible Reply Content */
+.reply-content-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 /* AI Reply Markdown styles */
 .reply-content {
   font-size: 13.5px;
@@ -1004,6 +1026,61 @@ body {
   color: var(--text-primary);
   word-break: break-word;
   overflow-wrap: break-word;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+}
+
+.reply-content.collapsed {
+  max-height: 0;
+  opacity: 0;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden;
+}
+
+.reply-content.expanded {
+  max-height: 5000px;
+  opacity: 1;
+  overflow: visible;
+}
+
+.reply-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(167, 139, 250, 0.08);
+  border: 1px solid rgba(167, 139, 250, 0.25);
+  color: #a78bfa;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  width: fit-content;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  font-weight: 500;
+  outline: none;
+}
+
+.reply-toggle-btn:hover {
+  background: rgba(167, 139, 250, 0.16);
+  border-color: #a78bfa;
+  transform: translateY(-1px);
+}
+
+.reply-toggle-btn:active {
+  transform: translateY(0);
+}
+
+.reply-toggle-btn .arrow {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.2s ease;
+}
+
+.reply-toggle-btn.expanded {
+  background: rgba(167, 139, 250, 0.04);
+  border-color: rgba(167, 139, 250, 0.15);
+  color: var(--text-secondary);
 }
 
 /* Responsive Premium Markdown Tables */
